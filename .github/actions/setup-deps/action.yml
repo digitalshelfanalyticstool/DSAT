@@ -1,0 +1,23 @@
+name: Install dependencies
+description: Node 20 plus node_modules restored from cache; npm ci only when the lockfile changed.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    # Restoring node_modules takes a few seconds; npm ci takes 25-56s and every
+    # CI job paid it. The key covers everything npm ci's output depends on.
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          node_modules
+          server/node_modules
+          client/node_modules
+        key: node-modules-${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci

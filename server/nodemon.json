@@ -1,0 +1,17 @@
+{
+  "watch": ["src"],
+  "ext": "ts,js,json",
+  "ignore": [
+    "**/*.md",
+    "node_modules/**",
+    "dist/**",
+    "data/**",
+    "storage/**"
+  ],
+  "exec": "tsx src/index.ts",
+  "delay": 2000,
+  "signal": "SIGTERM",
+  "env": {
+    "NODE_ENV": "development"
+  }
+}

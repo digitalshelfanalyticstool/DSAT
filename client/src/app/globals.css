@@ -1,0 +1,480 @@
+@import "tailwindcss";
+
+/* Prevent CLS from scrollbar appearing/disappearing */
+html {
+  scrollbar-gutter: stable;
+}
+
+@theme {
+  /* ── Design Tokens ── */
+
+  /* Palette tokens. These defaults are the "light-blue" palette; the
+     [data-palette] blocks below override them for the other palettes (the
+     ids match PALETTE_IDS in server/src/services/appearance.ts). Every
+     palette keeps the same contrast rules:
+     - accent / accent-600 : text, button fills, focus rings — ≥4.5:1 on
+                             surface, and white-on-accent ≥4.5:1
+     - champagne           : DECORATION ONLY (borders, large headings, glow)
+     - champagne-ink       : the only champagne token safe for text
+     - ink-muted           : secondary text — ≥4.5:1 on every surface */
+  --color-primary: #0c4a6e;
+  --color-primary-light: #075985;
+  --color-primary-dark: #082f49;
+
+  --color-secondary: #64748b;
+  --color-secondary-light: #94a3b8;
+  --color-secondary-dark: #475569;
+
+  --color-accent: #0369a1;
+  --color-accent-light: #0284c7;
+  --color-accent-dark: #075985;
+  --color-accent-50: #f0f9ff;
+  --color-accent-100: #e0f2fe;
+  --color-accent-200: #bae6fd;
+  --color-accent-500: #0284c7;
+  --color-accent-600: #0369a1;
+  --color-accent-700: #075985;
+
+  --color-violet: #8b5cf6;
+  --color-violet-light: #a78bfa;
+  --color-violet-dark: #7c3aed;
+
+  --color-paper: #ffffff;
+  --color-paper-2: #f0f9ff;
+  --color-ink: #0c1a2b;
+  --color-ink-muted: #475569;
+  --color-hairline: #d6e4f0;
+  --color-champagne: #38bdf8;
+  --color-champagne-ink: #0369a1;
+
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f0f9ff;
+  --color-surface-tertiary: #e0f2fe;
+
+  /* Success */
+  --color-success: #10b981;
+  --color-success-light: #d1fae5;
+  --color-success-dark: #059669;
+
+  /* Warning */
+  --color-warning: #f59e0b;
+  --color-warning-light: #fef3c7;
+  /* `warning-dark` is the *text* token (icon + copy on a `warning-light`
+     tint). Darkened from amber-600 #d97706 (≈3:1 on a pale amber bg —
+     failed the axe-core AA contrast gate, e.g. the /login session-expired
+     banner) to amber-800 #92400e (≈8:1). White-on-#92400e ≈7:1, so it's
+     still fine as a fill/hover bg. */
+  --color-warning-dark: #92400e;
+
+  /* Error */
+  --color-error: #f43f5e;
+  --color-error-light: #ffe4e6;
+  --color-error-dark: #e11d48;
+
+  /* Info */
+  --color-info: #3b82f6;
+  --color-info-light: #dbeafe;
+  --color-info-dark: #2563eb;
+
+  /* Fonts */
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-display: 'Outfit', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Spacing */
+  --spacing-18: 4.5rem;
+  --spacing-88: 22rem;
+
+  /* Shadows */
+  --shadow-premium-sm: 0 0 0 1px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-premium: 0 0 0 1px rgba(0,0,0,0.03), 0 1px 3px rgba(0,0,0,0.04), 0 6px 16px rgba(0,0,0,0.04);
+  --shadow-premium-lg: 0 0 0 1px rgba(0,0,0,0.03), 0 2px 8px rgba(0,0,0,0.06), 0 12px 32px rgba(0,0,0,0.08);
+  --shadow-premium-xl: 0 0 0 1px rgba(0,0,0,0.03), 0 4px 16px rgba(0,0,0,0.08), 0 24px 64px rgba(0,0,0,0.12);
+  --shadow-glow-accent: 0 0 18px rgba(107, 88, 54, 0.16);
+  --shadow-glow-success: 0 0 20px rgba(16, 185, 129, 0.15);
+  --shadow-glow-error: 0 0 20px rgba(244, 63, 94, 0.15);
+  --shadow-inner-white: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+
+  /* Border Radius */
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.25rem;
+
+  /* Easing */
+  --ease-premium: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Z-index scale — referenced via z-[var(--z-*)]. Documents the de-facto
+     stacking order so future surfaces don't ad-hoc collide.
+     - nav     30  : Header (sticky), Sidebar (collapsed/expanded desktop)
+     - modal   50  : Modal (Dialog)
+     - toast  100  : Toast container, CommandPalette, skip-to-content link
+     - skip   100  : same band as toast — skip link wins because it's painted last
+     - overlay 200 : SpotlightOverlay (onboarding) — must clear modals + toasts */
+  --z-nav: 30;
+  --z-modal: 50;
+  --z-toast: 100;
+  --z-skip: 100;
+  --z-overlay: 200;
+}
+
+/* ── Palettes ──
+   Plain custom properties, not @theme: Tailwind drops theme variables that no
+   utility class references, and these are read from inline styles. */
+:root {
+  --color-sidebar: #0c3354;
+  --sidebar-text: #b9d3e8;
+  --sidebar-text-hover: #eaf4fc;
+  --scrollbar: #c7d7e6;
+  --scrollbar-hover: #9fb6cc;
+  --button-bg: #0369a1;
+  --button-bg-hover: #075985;
+}
+
+/* "classic" — the original black and warm-white "Editorial Atelier" look. */
+:root[data-palette="classic"] {
+  --color-primary: #181b22;
+  --color-primary-light: #353e50;
+  --color-primary-dark: #0a0c10;
+  --color-accent: #6b5836;
+  --color-accent-light: #8a7048;
+  --color-accent-dark: #54441f;
+  --color-accent-50: #f8f4ec;
+  --color-accent-100: #efe7d6;
+  --color-accent-200: #e0d2b4;
+  --color-accent-500: #8a7048;
+  --color-accent-600: #6b5836;
+  --color-accent-700: #54441f;
+  --color-paper: #faf8f4;
+  --color-paper-2: #f2efe9;
+  --color-ink: #1a1814;
+  --color-ink-muted: #5c564c;
+  --color-hairline: #e6e1d8;
+  --color-champagne: #a98c5f;
+  --color-champagne-ink: #6b5836;
+  --color-surface: #faf8f4;
+  --color-surface-secondary: #f2efe9;
+  --color-surface-tertiary: #ebe7dd;
+  --color-sidebar: #0f172a;
+  --sidebar-text: #b5af9f;
+  --sidebar-text-hover: #ece7dc;
+  --scrollbar: #d8d2c4;
+  --scrollbar-hover: #bdb6a4;
+  --button-bg: #1a1814;
+  --button-bg-hover: #000000;
+}
+
+:root[data-palette="green"] {
+  --color-primary: #064e3b;
+  --color-primary-light: #065f46;
+  --color-primary-dark: #022c22;
+  --color-accent: #047857;
+  --color-accent-light: #059669;
+  --color-accent-dark: #065f46;
+  --color-accent-50: #ecfdf5;
+  --color-accent-100: #d1fae5;
+  --color-accent-200: #a7f3d0;
+  --color-accent-500: #059669;
+  --color-accent-600: #047857;
+  --color-accent-700: #065f46;
+  --color-paper: #ffffff;
+  --color-paper-2: #f0fdf4;
+  --color-ink: #10201a;
+  --color-ink-muted: #4b5a53;
+  --color-hairline: #d7e6dd;
+  --color-champagne: #34d399;
+  --color-champagne-ink: #047857;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f0fdf4;
+  --color-surface-tertiary: #dcfce7;
+  --color-sidebar: #052e24;
+  --sidebar-text: #b4d5c5;
+  --sidebar-text-hover: #e8f5ee;
+  --scrollbar: #c3dccd;
+  --scrollbar-hover: #9cc2ac;
+  --button-bg: #047857;
+  --button-bg-hover: #065f46;
+}
+
+:root[data-palette="slate"] {
+  --color-primary: #1e293b;
+  --color-primary-light: #334155;
+  --color-primary-dark: #0f172a;
+  --color-accent: #475569;
+  --color-accent-light: #64748b;
+  --color-accent-dark: #334155;
+  --color-accent-50: #f8fafc;
+  --color-accent-100: #f1f5f9;
+  --color-accent-200: #e2e8f0;
+  --color-accent-500: #64748b;
+  --color-accent-600: #475569;
+  --color-accent-700: #334155;
+  --color-paper: #ffffff;
+  --color-paper-2: #f8fafc;
+  --color-ink: #0f172a;
+  --color-ink-muted: #51606f;
+  --color-hairline: #e2e8f0;
+  --color-champagne: #94a3b8;
+  --color-champagne-ink: #475569;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f8fafc;
+  --color-surface-tertiary: #f1f5f9;
+  --color-sidebar: #1e293b;
+  --sidebar-text: #cbd5e1;
+  --sidebar-text-hover: #f1f5f9;
+  --scrollbar: #cbd5e1;
+  --scrollbar-hover: #94a3b8;
+  --button-bg: #334155;
+  --button-bg-hover: #1e293b;
+}
+
+body {
+  color: var(--color-ink);
+  background-color: var(--color-paper);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar — warm neutrals */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+
+/* ── Keyframes ── */
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes toast-progress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+/* ── Animation classes ── */
+.animate-in {
+  animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-in-delay {
+  animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--stagger, 0) * 60ms);
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Named-class overrides: keep these for the explicit fade-in/scale-in
+     entrance animations so they short-circuit to their final state instead
+     of just running fast. */
+  .animate-in, .animate-in-delay, .animate-fade-in, .animate-scale-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  /* Universal animation/transition silencer. Catches Tailwind's animate-spin
+     / animate-pulse / animate-bounce *and* arbitrary animate-[...] inline
+     animations that the named-class overrides above don't reach. WCAG 2.3.3
+     Animation from Interactions. Duration set to 0.001ms (not 0) so events
+     like `transitionend`/`animationend` still fire — code that depends on
+     those callbacks (e.g. SpotlightOverlay's transition gate) keeps working.
+     `*:not(.toast-progress)` exempts the toast countdown bar so users still
+     see how long until auto-dismiss; the user can dismiss manually anyway. */
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Skeleton loader (warm paper tones) ── */
+.skeleton {
+  background: linear-gradient(90deg, var(--color-surface-secondary) 25%, var(--color-surface-tertiary) 50%, var(--color-surface-secondary) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 2px;
+}
+
+/* Warm paper-tone shimmer for the "Editorial Atelier" product surfaces.
+   Squarer corners than .skeleton; reduced-motion is handled by the
+   universal silencer above. */
+.skeleton-paper {
+  background: linear-gradient(90deg, var(--color-surface-secondary) 25%, var(--color-surface-tertiary) 50%, var(--color-surface-secondary) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 2px;
+}
+
+/* Staggered editorial reveal — set `style={{ ['--i' as string]: index }}`
+   on each item. Reuses fadeInUp; reduced-motion handled by the universal
+   silencer above (it short-circuits to the final frame). */
+.reveal-stagger {
+  animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+/* ── Data alignment ── */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Editorial surface styles — hairline frame, not heavy shadow ── */
+.surface-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-hairline);
+  border-radius: 0.125rem;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-ink) 4%, transparent);
+  transition: box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.surface-card-interactive:hover {
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--color-ink) 7%, transparent);
+  transform: translateY(-1px);
+}
+
+.surface-card-interactive:active {
+  transform: translateY(0);
+}
+
+/* ── Glass effect (paper / ink tinted) ── */
+.glass {
+  background: color-mix(in srgb, var(--color-paper) 82%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.glass-dark {
+  background: color-mix(in srgb, var(--color-ink) 86%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── Solid fills (was indigo→violet gradients) ──
+   Primary buttons use the palette's --button-bg (ink in classic, the
+   accent elsewhere); the brighter champagne is reserved for decoration. Class names kept so existing call sites don't churn. */
+.bg-gradient-premium {
+  background: var(--button-bg);
+}
+
+.bg-gradient-premium-hover {
+  background: var(--button-bg-hover);
+}
+
+.bg-gradient-subtle {
+  background: linear-gradient(135deg, var(--color-surface) 0%, var(--color-surface-secondary) 50%, var(--color-surface-tertiary) 100%);
+}
+
+/* ── Sidebar (dark shell, champagne active accent) ── */
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--sidebar-text);
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sidebar-nav-item:hover {
+  color: var(--sidebar-text-hover);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.sidebar-nav-item-active {
+  color: #ffffff;
+  background: color-mix(in srgb, var(--color-champagne) 22%, transparent);
+}
+
+.sidebar-nav-item-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: var(--color-champagne);
+  border-radius: 0 2px 2px 0;
+}
+
+/* ── Focus visible (bronze accent ring; the 2px offset keeps it visible
+   even where ring colour ≈ surface colour) ── */
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ── Toast progress bar ── */
+.toast-progress {
+  animation: toast-progress 4s linear forwards;
+}
+
+/* ── Modal native dialog backdrop ──
+   The Modal primitive uses imperative `dialog.showModal()` so it gets the
+   real top-layer + ::backdrop pseudo-element. We can't write
+   `dialog::backdrop` styles from JSX (pseudo-elements aren't reachable
+   from inline styles), so the visual is declared here and the dialog gets
+   the `.modal-dialog` class. Ink-tinted scrim. */
+.modal-dialog::backdrop {
+  background: color-mix(in srgb, var(--color-ink) 42%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+

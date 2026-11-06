@@ -1,0 +1,58 @@
+name: Semgrep
+
+# Mirrors ci.yml: PR-scoped SAST on the server + client source trees. Runs the
+# Semgrep OSS engine (no account, no token) and blocks the PR check only on
+# ERROR-severity findings the PR *introduces* — see --baseline-commit below.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'server/**'
+      - 'client/**'
+      - '.github/workflows/semgrep.yml'
+
+permissions:
+  contents: read
+
+# Cancel in-progress runs when a PR is updated — saves minutes on rapid pushes.
+concurrency:
+  group: semgrep-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sast:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # OSS engine only — never phone home. Registry rule packs are still
+      # fetched over HTTPS, but no scan telemetry leaves CI.
+      SEMGREP_SEND_METRICS: 'off'
+
+    steps:
+      # fetch-depth: 0 — --baseline-commit needs the PR base commit object in
+      # the local history; the default depth-1 checkout would not have it, and
+      # Semgrep would silently fall back to scanning the full tree (blocking on
+      # pre-existing debt instead of net-new findings).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Semgrep
+        run: pip install --no-cache-dir semgrep
+
+      # --error: exit non-zero on ERROR findings → red PR check (blocking gate).
+      # --baseline-commit: only findings absent from the PR base count; existing
+      #   code's debt does not wall off the first PR. WARN/INFO never block.
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config p/typescript \
+            --config p/javascript \
+            --config p/react \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --error \
+            --metrics off \
+            --baseline-commit "${{ github.event.pull_request.base.sha }}" \
+            server client

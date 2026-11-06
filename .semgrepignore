@@ -1,0 +1,14 @@
+# Semgrep ignore file.
+#
+# NOTE: presence of this file REPLACES Semgrep's built-in default ignores, so
+# the usual build/vendor directories must be listed explicitly here too — omit
+# them and Semgrep starts walking compiled output and dependencies.
+
+# --- Dependencies & build output (restore Semgrep defaults) ---
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.min.js
+

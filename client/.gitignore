@@ -1,0 +1,4 @@
+# Playwright a11y CI artifacts
+a11y/.auth/
+playwright-report/
+test-results/

@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment: block every .env variant except the examples
+.env*
+!.env.example
+
+# npm auth tokens
+.npmrc
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Runtime data: keep the directories via .gitkeep, ignore the content
+data/*.json
+server/data/*.json
+server/data/catalogs/*.json
+!server/data/catalogs/.gitkeep
+server/data/checkpoints/*.json
+!server/data/checkpoints/.gitkeep
+server/data/initial-admin-password.txt
+server/storage/
+storage/
+
+# Exports
+*.csv
+
+# Local Docker overrides (may contain secrets)
+docker-compose.override.yml
+compose.override.yaml

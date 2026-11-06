@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-deps
+      - name: Lint
+        run: npm run lint --workspace=server
+      - name: Build (type-checks)
+        run: npm run build --workspace=server
+
+  client:
+    name: Client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-deps
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: client/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('client/src/**') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
+      - name: Lint
+        run: npm run lint --workspace=client
+      - name: Build (type-checks)
+        run: npm run build --workspace=client

@@ -1,0 +1,117 @@
+# Self-hosted stack: `scripts/docker-env.sh && docker compose up -d`, then open
+# http://localhost:8080. See the README's "Run with Docker" section.
+
+x-server: &server
+  build: { context: ., target: server }
+  image: ghcr.io/digitalshelfanalyticstool/dsat-server:${APP_VERSION:-latest}
+  pull_policy: missing
+  restart: unless-stopped
+  init: true # reaps Chromium child processes
+  shm_size: 1gb # Chromium crashes on Docker's 64 MB default
+  volumes:
+    - appdata:/app/server/data
+    - storage:/app/server/storage
+
+x-server-env: &server-env
+  NODE_ENV: production
+  PORT: "3001"
+  DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD:?run scripts/docker-env.sh first}@postgres:5432/app
+  # Postgres and Redis are reachable only on this compose network, so no TLS.
+  DATABASE_SSL: "false"
+  REDIS_URL: redis://redis:6379
+  JWT_SECRET: ${JWT_SECRET:?run scripts/docker-env.sh first}
+  EMAIL_CONFIG_ENCRYPTION_KEY: ${EMAIL_CONFIG_ENCRYPTION_KEY:?run scripts/docker-env.sh first}
+  # Plain HTTP by default; set to true once SITE_ADDRESS serves HTTPS.
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  EXPECTED_WORKERS: ${WORKER_REPLICAS:-1}
+
+services:
+  api:
+    <<: *server
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: api
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 6
+
+  worker:
+    <<: *server
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *server-env
+      PROCESS_ROLE: worker
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+    # The API runs the database migrations; workers start after it.
+    depends_on:
+      api: { condition: service_healthy }
+    # ponytail: a job still running after this is killed and retried by the queue.
+    stop_grace_period: 5m
+
+  web:
+    build: { context: ., target: web }
+    image: ghcr.io/digitalshelfanalyticstool/dsat-web:${APP_VERSION:-latest}
+    pull_policy: missing
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+  proxy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_healthy }
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/docker-env.sh first}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "app", "-d", "app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:
+  appdata:
+  storage:
+  caddy:

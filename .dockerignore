@@ -1,0 +1,16 @@
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+server/data
+server/storage
+data
+storage
+graphify-out
+.superpowers
+**/*.log

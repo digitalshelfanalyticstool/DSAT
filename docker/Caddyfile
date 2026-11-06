@@ -1,0 +1,14 @@
+# One origin for the browser: /api and the queue dashboard go to the API, the
+# rest to the web app. SITE_ADDRESS defaults to plain HTTP on port 80; set it to
+# a domain name (e.g. shelf.example.com) and Caddy gets an HTTPS certificate.
+{$SITE_ADDRESS::80} {
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+	handle /admin/queues* {
+		reverse_proxy api:3001
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+}

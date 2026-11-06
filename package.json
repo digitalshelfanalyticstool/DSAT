@@ -1,0 +1,27 @@
+{
+  "name": "enterprise-web-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Enterprise Web Scraper System for extracting product variant data from ecommerce websites",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=server",
+    "dev:client": "npm run dev --workspace=client",
+    "build:server": "npm run build --workspace=server",
+    "build:client": "npm run build --workspace=client"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "overrides": {
+    "basic-ftp": ">=5.3.1",
+    "postcss": "^8.5.12",
+    "sharp": "^0.35.0",
+    "uuid": "^14.0.0",
+    "glob@>=9.0.0 <14.0.2": "^14.0.2",
+    "minimatch@>=7.0.0 <11.0.1": "^11.0.1"
+  }
+}
