@@ -14,6 +14,7 @@
  *   POST   /:id/reactivate   — reactivate user
  *   POST   /:id/lock         — lock user
  *   POST   /:id/unlock       — unlock user
+ *   POST   /:id/erase        — erase a deactivated user's personal data
  *   POST   /import           — bulk import users from CSV or XLSX
  */
 
@@ -31,6 +32,7 @@ import {
   listUsers,
   getUserById,
 } from '../services/user-manager';
+import { eraseUserPersonalData } from '../services/user-erasure';
 import { bulkCreateOrUpdate, type BulkUserRow } from '../services/user-bulk-ops';
 import { AuditService } from '../services/audit-service';
 import { DatabaseService } from '../services/database';
@@ -536,6 +538,39 @@ router.post('/:id/lock', userActionRoute(lockUser, 'lock'));
  *         description: User not found
  */
 router.post('/:id/unlock', userActionRoute(unlockUser, 'unlock'));
+
+/**
+ * @openapi
+ * /admin/users/{id}/erase:
+ *   post:
+ *     summary: Erase a deactivated user's personal data
+ *     description: Admin-only and irreversible. Anonymises the user row and scrubs their IP addresses, user agents and email address from logs. Jobs and scrape history are kept.
+ *     tags: [Admin - Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Personal data erased
+ *       400:
+ *         description: Cannot erase self or an admin
+ *       404:
+ *         description: User not found
+ *       409:
+ *         description: User is still active or already erased
+ */
+router.post('/:id/erase', validate(userIdSchemas), asyncHandler(async (req: ValidatedRequest<typeof userIdSchemas, AuthenticatedRequest>, res) => {
+  const userId = req.params.id;
+
+  const { db, audit, ctx } = await getAuditContext(req);
+  await eraseUserPersonalData(db, userId, req.user!.id, audit, ctx);
+
+  res.json({ success: true, message: 'Personal data erased' });
+}, { operation: 'adminEraseUser' }));
 
 /** Parse an XLSX/XLS file buffer into BulkUserRow[]. Throws on format errors. */
 async function parseXlsxFile(buffer: Buffer): Promise<BulkUserRow[]> {
