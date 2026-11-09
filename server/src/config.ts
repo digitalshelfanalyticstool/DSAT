@@ -179,6 +179,14 @@ export const config = {
       const parsed = Number.parseInt(process.env.SCRAPING_PROVIDER_CACHE_TTL_MS ?? '', 10);
       return Number.isNaN(parsed) || parsed < 0 ? 30_000 : parsed;
     },
+    /**
+     * Hostnames scrape fetches may reach even though they resolve to a
+     * loopback, private or link-local address (SCRAPER_ALLOWED_PRIVATE_HOSTS,
+     * comma-separated, exact match). Empty by default: every such hop fails.
+     */
+    get allowedPrivateHosts(): string[] {
+      return (process.env.SCRAPER_ALLOWED_PRIVATE_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+    },
     /** URL fetched by "Test connection" for Direct and Apify; should echo the egress IP. */
     get testUrl(): string {
       return process.env.SCRAPING_PROVIDER_TEST_URL || 'https://api.ipify.org?format=json';
@@ -394,6 +402,16 @@ export const config = {
       const parsed = Number.parseInt(raw, 10);
       if (Number.isNaN(parsed) || parsed < 1_000 || parsed > 600_000) return 30_000;
       return parsed;
+    },
+    /**
+     * Largest decoded page body a scrape fetch will read before failing it.
+     * Default 10 MB: heavy retailer pages and JSON APIs run to a few MB, and
+     * a gzip/br body can expand a thousandfold, so this bounds memory per
+     * in-flight fetch (UNLOCKER_CONCURRENCY of them per worker).
+     */
+    get maxBodyBytes(): number {
+      const parsed = Number.parseInt(process.env.SCRAPER_MAX_BODY_BYTES ?? '', 10);
+      return Number.isNaN(parsed) || parsed < 1 ? 10 * 1024 * 1024 : parsed;
     },
     get dataDir(): string {
       return process.env.DATA_DIR || path.resolve(process.cwd(), 'data');

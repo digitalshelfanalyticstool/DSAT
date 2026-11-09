@@ -6,18 +6,22 @@
  */
 
 /**
- * Strips all HTML tags from a string.
- * Loops until no tags remain to handle nested/malformed markup like `<scr<script>ipt>`.
+ * Strips all HTML tags from a string: each `<` through the next `>` goes, and a
+ * `<` with no `>` after it is kept with the rest of the text. Same output as
+ * looping `replace(/<[^>]*>/g, '')`, but a linear scan: that regex rescanned to
+ * the end of the string from every unclosed `<`, quadratic on retailer input.
+ * One pass is enough, since the only `<` it leaves has no `>` after it.
  */
 function stripHtmlTags(text: string): string {
-  let result = text;
-  let prev: string;
-  do {
-    prev = result;
-    // eslint-disable-next-line sonarjs/slow-regex, sonarjs/super-linear-regex -- `[^>]*` cannot match `>`, so there is exactly one way to match and the engine never backtracks. Linear. Both ids are named because `super-linear-regex` is the rule that actually fires; naming only `slow-regex` silently suppressed nothing.
-    result = result.replace(/<[^>]*>/g, '');
-  } while (result !== prev);
-  return result;
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const lt = text.indexOf('<', i);
+    const gt = lt === -1 ? -1 : text.indexOf('>', lt + 1);
+    if (gt === -1) return out + text.slice(i);
+    out += text.slice(i, lt);
+    i = gt + 1;
+  }
 }
 
 /**
@@ -81,14 +85,15 @@ export function forEachScriptTag<T>(
  */
 export function findProductJsonInScripts(html: string): object | undefined {
   return forEachScriptTag(html, (content) => {
-    // Bound the greedy quantifier to a 1MB cap so degenerate inputs cannot
-    // cause super-linear backtracking on the surrounding capture group.
-     
-    const jsonObjectRegex = /(\{[\s\S]{10,1000000}\})/;
-    const jsonMatch = jsonObjectRegex.exec(content);
-    if (!jsonMatch) return undefined;
+    // First '{' to the last '}' within 1 MB of it, at least 10 chars apart: the
+    // span the old greedy regex matched, found in linear time. That regex
+    // backtracked quadratically on a run of '{' with no '}' after it.
+    const start = content.indexOf('{');
+    if (start === -1) return undefined;
+    const end = content.lastIndexOf('}', start + 1_000_001);
+    if (end - start - 1 < 10) return undefined;
     try {
-      const parsed = JSON.parse(jsonMatch[1]);
+      const parsed = JSON.parse(content.slice(start, end + 1));
       if (
         typeof parsed === 'object' &&
         parsed !== null &&
