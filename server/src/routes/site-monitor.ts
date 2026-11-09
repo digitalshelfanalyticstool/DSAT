@@ -6,7 +6,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { authMiddleware, sseAuthMiddleware, requireRole } from '../middleware/auth';
+import { authMiddleware, sseAuthMiddleware, requireRole, isActiveAdmin } from '../middleware/auth';
+import type { AuthenticatedRequest } from '../middleware/auth';
 import { validate, type ValidatedRequest } from '../middleware/validate';
 import { DatabaseService } from '../services/database';
 import { runMonitor, startMonitorRun, getMonitorSchedule, type MonitorScheduleConfig } from '../services/site-monitor-runner';
@@ -29,6 +30,9 @@ const runIdParamSchema = z.object({
 });
 const runIdSchemas = { params: runIdParamSchema };
 
+/** How often an open run stream re-checks that its subscriber is still an admin. */
+const ADMIN_RECHECK_MS = 5_000;
+
 /**
  * GET /api/site-monitor/runs/:runId/stream
  * SSE stream of live progress events for a monitor run.
@@ -46,7 +50,7 @@ router.get(
   sseAuthMiddleware,
   requireRole('admin'),
   validate(runIdSchemas),
-  asyncHandler(async (req: ValidatedRequest<typeof runIdSchemas>, res) => {
+  asyncHandler(async (req: ValidatedRequest<typeof runIdSchemas, AuthenticatedRequest>, res) => {
     const { runId } = req.params;
     const db = await DatabaseService.getInstance();
 
@@ -81,6 +85,7 @@ router.get(
     let subscribed = true;
 
     const progressHandler = (event: MonitorProgressEvent): void => {
+      if (!subscribed) return;
       try {
         sendSSEEvent(res, 'progress', event);
 
@@ -99,10 +104,28 @@ router.get(
     // Heartbeat to keep connection alive through proxies
     const heartbeatTimer = startHeartbeat(res);
 
+    // Close the stream if the subscriber stops being an active admin.
+    const userId = req.user!.id;
+    const authTimer = setInterval(() => {
+      isActiveAdmin(userId).then((ok) => {
+        if (ok || !subscribed) return;
+        sendSSEEvent(res, 'unauthorized', { message: 'Access revoked' });
+        cleanup();
+        res.end();
+      }).catch((err: unknown) => {
+        logger.warn('Stream authorization re-check failed', {
+          operation: 'monitorStream',
+          runId,
+          error: (err as Error).message,
+        });
+      });
+    }, ADMIN_RECHECK_MS);
+
     const cleanup = (): void => {
       if (!subscribed) return;
       subscribed = false;
       clearInterval(heartbeatTimer);
+      clearInterval(authTimer);
       disposeProgress().catch((err) => {
         logger.warn('Failed to unsubscribe from monitor progress channel', {
           operation: 'monitorStream',

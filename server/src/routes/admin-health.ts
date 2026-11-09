@@ -13,7 +13,7 @@
 import { Router, type Response } from 'express';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { sseAuthMiddleware, requireRole } from '../middleware/auth';
+import { sseAuthMiddleware, requireRole, isActiveAdmin } from '../middleware/auth';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { getHealthMonitor } from '../services/health-monitor';
 import { DatabaseService } from '../services/database';
@@ -73,13 +73,21 @@ adminHealthStreamRouter.get('/stream', sseAuthMiddleware, requireRole('admin'), 
 
   let active = true;
   const monitor = getHealthMonitor();
+  const userId = req.user!.id;
 
-  // Push health report every 5 seconds
+  // Push health report every 5 seconds, while the subscriber is still an active admin.
   const pushTimer = setInterval(async () => {
     if (!active) return;
     try {
+      if (!(await isActiveAdmin(userId))) {
+        if (!active) return;
+        sendSSEEvent(res, 'unauthorized', { message: 'Access revoked' });
+        cleanup();
+        res.end();
+        return;
+      }
       const report = await monitor.check();
-      sendSSEEvent(res, 'health', report);
+      if (active) sendSSEEvent(res, 'health', report);
     } catch (err) {
       logger.warn('Failed to push health event', {
         operation: 'healthStream',
