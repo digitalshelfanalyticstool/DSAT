@@ -13,7 +13,7 @@ import { config } from '../config';
 import { createLogger } from '../utils/logger';
 import { validatePasswordStrength } from '../utils/password-validator.js';
 import type { AuditLogger, AuditRequestContext } from './audit-service';
-import { hashPassword, validateEmail, validateUsername } from './user-records';
+import { hashPassword, mustChangePasswordOnCreate, validateEmail, validateUsername } from './user-records';
 import { invalidateUserCache } from './user-cache';
 import { revokeAccountAccess } from './user-manager';
 
@@ -167,8 +167,8 @@ async function flushUpdates(
 
 /**
  * Batched INSERT for new users. One unnest()-driven round-trip per `batchSize`
- * rows. Imported accounts are not forced to change their password on first
- * sign-in (unlike accounts created from the admin form).
+ * rows. must_change_password follows mustChangePasswordOnCreate(role), the
+ * same rule as accounts created from the admin form.
  */
 async function flushCreates(
   tx: { run: (sql: string, ...params: unknown[]) => Promise<unknown> },
@@ -182,6 +182,7 @@ async function flushCreates(
     const roles: string[] = [];
     const createdAts: number[] = [];
     const updatedAts: number[] = [];
+    const mustChanges: number[] = [];
     for (let j = 0; j < batch.length; j++) {
       usernames.push(batch[j].username);
       emails.push(batch[j].email);
@@ -189,13 +190,14 @@ async function flushCreates(
       roles.push(batch[j].role);
       createdAts.push(now);
       updatedAts.push(now);
+      mustChanges.push(mustChangePasswordOnCreate(batch[j].role) ? 1 : 0);
     }
     await tx.run(
       `INSERT INTO users (username, email, password_hash, role, created_at, updated_at, is_active, must_change_password)
-       SELECT username, email, password_hash, role, created_at, updated_at, 1, 0
-       FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[], $6::bigint[])
-         AS t(username, email, password_hash, role, created_at, updated_at)`,
-      usernames, emails, passwordHashes, roles, createdAts, updatedAts,
+       SELECT username, email, password_hash, role, created_at, updated_at, 1, must_change_password
+       FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[], $6::bigint[], $7::int[])
+         AS t(username, email, password_hash, role, created_at, updated_at, must_change_password)`,
+      usernames, emails, passwordHashes, roles, createdAts, updatedAts, mustChanges,
     );
   }
 }
