@@ -478,6 +478,8 @@ export async function unlockUser(
      WHERE id = $2 RETURNING *`,
     now, userId, MANUAL_LOCK_UNTIL,
   ))!;
+  // Per-source sign-in throttles too (keys from auth-service loginSourceKey).
+  await db.run("DELETE FROM rate_limit_attempts WHERE type = 'username' AND key LIKE $1", `login:${userId}:%`);
 
   if (audit) {
     await audit.log({
