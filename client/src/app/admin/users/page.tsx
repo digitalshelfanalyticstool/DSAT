@@ -70,6 +70,8 @@ function AdminUsersPageInner() {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [resetPwOpen, setResetPwOpen] = useState(false);
+  const [eraseOpen, setEraseOpen] = useState(false);
+  const [eraseConfirm, setEraseConfirm] = useState('');
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
 
   // Bulk selection
@@ -232,6 +234,24 @@ function AdminUsersPageInner() {
       await loadUsers();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to delete user', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Erase personal data
+  const openErase = (u: AdminUser) => { setSelectedUser(u); setEraseConfirm(''); setEraseOpen(true); };
+
+  const handleErase = async () => {
+    if (!selectedUser) return;
+    setSubmitting(true);
+    try {
+      await apiClient.eraseAdminUser(selectedUser.id);
+      showToast('Personal data erased', 'success');
+      setEraseOpen(false);
+      await loadUsers();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to erase personal data', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -559,6 +579,9 @@ function AdminUsersPageInner() {
                                 {!isLocked(u) && (
                                   <Button size="sm" variant="secondary" onClick={() => handleReactivate(u)}>Reactivate</Button>
                                 )}
+                                {!u.username.startsWith('erased-') && (
+                                  <Button size="sm" variant="danger" onClick={() => openErase(u)}>Erase data</Button>
+                                )}
                               </>
                             )}
                           </div>
@@ -698,6 +721,23 @@ function AdminUsersPageInner() {
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
             <Button variant="danger" onClick={handleDelete} disabled={submitting}>
               {submitting ? 'Deactivating...' : 'Deactivate'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Erase Personal Data Confirmation */}
+      <Modal open={eraseOpen} onClose={() => setEraseOpen(false)} title="Erase personal data">
+        <div className="space-y-4">
+          <p className="text-ink-muted">
+            This permanently replaces <span className="font-semibold text-ink">{selectedUser?.username}</span>&apos;s name, email and sign-in details and removes their IP addresses from the audit log. Their jobs and scrape history stay, attributed to an anonymous id. This cannot be undone.
+          </p>
+          <Input label="Type the username to confirm" value={eraseConfirm} autoComplete="off"
+            onChange={(e) => setEraseConfirm(e.target.value)} />
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="outline" onClick={() => setEraseOpen(false)}>Cancel</Button>
+            <Button variant="danger" onClick={handleErase} disabled={submitting || !selectedUser || eraseConfirm !== selectedUser.username}>
+              {submitting ? 'Erasing...' : 'Erase permanently'}
             </Button>
           </div>
         </div>
