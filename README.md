@@ -298,6 +298,30 @@ Alerts appear on the **Alerts** page for everyone, with an unread badge in the s
 
 The maintenance task (every `MAINTENANCE_INTERVAL_MS`, default weekly) drops snapshots, alerts, image checks and site-monitor runs older than `SNAPSHOT_RETENTION_DAYS`, and web-vitals data older than `WEB_VITALS_RETENTION_DAYS`. `product_snapshots` is partitioned by month and `web_vitals` by week, with UTC bounds.
 
+### Personal data
+
+DSAT is self-hosted, so the operator is the data controller. This section describes the controls DSAT provides. It is not a compliance certification.
+
+**What is stored:**
+
+- `users`: username, email, password hash, SSO issuer and subject, last sign-in time.
+- `audit_logs`: IP address and user agent of each logged action, and the attempted username on a failed sign-in.
+- `email_log`: recipient address of each email sent.
+- `web_vitals`: route and timings only, with no user id.
+
+**Retention defaults:**
+
+- `email_log`: 90 days (`EMAIL_LOG_RETENTION_DAYS`).
+- Snapshots: 90 days (`SNAPSHOT_RETENTION_DAYS`). Web vitals: 90 days (`WEB_VITALS_RETENTION_DAYS`).
+- `audit_logs`, `users` and jobs: kept until removed.
+
+**Deactivate vs erase:**
+
+- **Deactivate** blocks sign-in and can be reversed with **Reactivate**.
+- **Erase data** (Admin → Users, on a deactivated non-admin account) is irreversible. It replaces the username and email with `erased-<id>`, makes the password unusable, unlinks SSO, ends the user's sessions and disables their schedules. It also removes their IP addresses and user agents from `audit_logs`, the failed sign-in entries that name them, and their address from `email_log`. Jobs and scrape history are kept, attributed to the anonymous id.
+
+**Data subject requests:** for access or export, an admin uses the user export (Admin → Users) and the audit-log export (Admin → Audit Logs). For deletion, deactivate the account and then erase it. Backups and the operator's own logs are outside DSAT and follow the operator's policy.
+
 ### Authentication & RBAC
 
 Two roles:
