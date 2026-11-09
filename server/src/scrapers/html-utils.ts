@@ -6,18 +6,22 @@
  */
 
 /**
- * Strips all HTML tags from a string.
- * Loops until no tags remain to handle nested/malformed markup like `<scr<script>ipt>`.
+ * Strips all HTML tags from a string: each `<` through the next `>` goes, and a
+ * `<` with no `>` after it is kept with the rest of the text. Same output as
+ * looping `replace(/<[^>]*>/g, '')`, but a linear scan: that regex rescanned to
+ * the end of the string from every unclosed `<`, quadratic on retailer input.
+ * One pass is enough, since the only `<` it leaves has no `>` after it.
  */
 function stripHtmlTags(text: string): string {
-  let result = text;
-  let prev: string;
-  do {
-    prev = result;
-    // eslint-disable-next-line sonarjs/slow-regex, sonarjs/super-linear-regex -- `[^>]*` cannot match `>`, so there is exactly one way to match and the engine never backtracks. Linear. Both ids are named because `super-linear-regex` is the rule that actually fires; naming only `slow-regex` silently suppressed nothing.
-    result = result.replace(/<[^>]*>/g, '');
-  } while (result !== prev);
-  return result;
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const lt = text.indexOf('<', i);
+    const gt = lt === -1 ? -1 : text.indexOf('>', lt + 1);
+    if (gt === -1) return out + text.slice(i);
+    out += text.slice(i, lt);
+    i = gt + 1;
+  }
 }
 
 /**
