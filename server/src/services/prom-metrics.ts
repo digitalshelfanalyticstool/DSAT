@@ -116,14 +116,35 @@ export function normalizeRoute(route: string): string {
     : result;
 }
 
+// The beacon is public, so normalizeRoute alone is not a bound: any
+// non-id-looking segment ('/q7', '/r1x/p') survives it. Only the client's
+// real pages get their own label; everything else folds into 'other'.
+// Add a new client page here or its vitals are reported as 'other'.
+const WEB_VITAL_ROUTES = new Set([
+  '/', '/login', '/setup', '/account', '/change-password', '/config', '/alerts',
+  '/analytics', '/jobs/history', '/jobs/create', '/jobs/:id', '/sites/new',
+  '/admin/analytics', '/admin/audit-logs', '/admin/dlq', '/admin/email-settings',
+  '/admin/email-settings/templates/:slug', '/admin/health', '/admin/messages',
+  '/admin/site-monitor', '/admin/users',
+]);
+
+/** Map a client pathname onto the closed set of web-vital route labels. */
+function webVitalRouteLabel(route: string): string {
+  const r = normalizeRoute(route)
+    .replace(/^\/jobs\/(?!history$|create$)[^/]+$/, '/jobs/:id')
+    .replace(/^(\/admin\/email-settings\/templates\/)[^/]+$/, '$1:slug');
+  return WEB_VITAL_ROUTES.has(r) ? r : 'other';
+}
+
 /**
  * Record one Web Vitals sample into the Prometheus registry.
  *
  * `value` arrives in the unit the `web-vitals` library reports: milliseconds
  * for the timing metrics, a unitless score for CLS. Timing values are
- * converted to seconds (Prometheus convention). The `route` is normalized to
- * keep series cardinality bounded. Unknown metric names are counted but not
- * bucketed — callers should validate the name first.
+ * converted to seconds (Prometheus convention). The `route` is mapped onto a
+ * closed label set ({@link webVitalRouteLabel}) to keep cardinality bounded.
+ * Unknown metric names are counted but not bucketed — callers should validate
+ * the name first.
  */
 export function recordWebVital(
   metric: string,
@@ -132,7 +153,7 @@ export function recordWebVital(
   route: string,
 ): void {
   webVitalSamplesTotal.inc({ metric, rating });
-  const normalizedRoute = normalizeRoute(route);
+  const normalizedRoute = webVitalRouteLabel(route);
   if (metric === 'CLS') {
     webVitalScore.observe({ metric, route: normalizedRoute }, value);
   } else if (WEB_VITAL_DURATION_METRICS.has(metric)) {
