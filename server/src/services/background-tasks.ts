@@ -60,8 +60,9 @@ export function apiBackgroundTasks(): BackgroundTask[] {
           config.scraping.bandwidthRetentionDays,
           config.email.emailLogRetentionDays,
           config.observability.webVitalsRetentionDays,
+          config.auth.auditLogRetentionDays,
         );
-        logger.info(`DB retention: removed ${r.snapshots} snapshot(s), ${r.bandwidth} bandwidth record(s), ${r.emailLog} email_log row(s), ${r.webVitals} web_vitals partition(s)`, {
+        logger.info(`DB retention: removed ${r.snapshots} snapshot(s), ${r.bandwidth} bandwidth record(s), ${r.emailLog} email_log row(s), ${r.auditLogs} audit_log row(s), ${r.webVitals} web_vitals partition(s)`, {
           operation: 'dbRetention', ...r,
         });
       },

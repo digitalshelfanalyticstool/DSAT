@@ -67,11 +67,12 @@ export async function cleanupOldWebVitals(retentionDays: number): Promise<number
 }
 
 /**
- * Delete rows of `table` whose `column` is older than `retentionDays`, in
- * batches (by ctid, so tables without an id column work too). Returns the
- * number of rows deleted.
+ * Delete rows of `table` matching `${column} ${cutoffSql}` (cutoffSql binds
+ * $1), in batches by ctid so tables without an id column work too.
  */
-export async function deleteOlderThan(table: string, column: string, retentionDays: number): Promise<number> {
+async function deleteInBatches(
+  operation: string, table: string, column: string, cutoffSql: string, cutoff: number, retentionDays: number,
+): Promise<number> {
   if (!IDENTIFIER_RE.test(table) || !IDENTIFIER_RE.test(column)) {
     throw new Error(`Refusing to prune unexpected identifier: ${table}.${column}`);
   }
@@ -83,10 +84,10 @@ export async function deleteOlderThan(table: string, column: string, retentionDa
       `DELETE FROM ${table}
        WHERE ctid = ANY(ARRAY(
          SELECT ctid FROM ${table}
-         WHERE ${column} < NOW() - INTERVAL '1 day' * $1
+         WHERE ${column} ${cutoffSql}
          LIMIT $2
        ))`,
-      retentionDays,
+      cutoff,
       BATCH_SIZE,
     );
     totalDeleted += result.changes;
@@ -94,9 +95,26 @@ export async function deleteOlderThan(table: string, column: string, retentionDa
   }
 
   if (totalDeleted > 0) {
-    logger.info('Pruned old rows', { operation: 'deleteOlderThan', table, retentionDays, deletedRows: totalDeleted });
+    logger.info('Pruned old rows', { operation, table, retentionDays, deletedRows: totalDeleted });
   }
   return totalDeleted;
+}
+
+/**
+ * Delete rows of `table` whose timestamp `column` is older than
+ * `retentionDays`. Returns the number of rows deleted.
+ */
+export async function deleteOlderThan(table: string, column: string, retentionDays: number): Promise<number> {
+  return deleteInBatches('deleteOlderThan', table, column, "< NOW() - INTERVAL '1 day' * $1", retentionDays, retentionDays);
+}
+
+/**
+ * Like deleteOlderThan, for a `column` holding unix seconds (BIGINT), such as
+ * audit_logs.created_at.
+ */
+export async function deleteOlderThanEpoch(table: string, column: string, retentionDays: number): Promise<number> {
+  const cutoff = Math.floor(Date.now() / 1000) - retentionDays * 86_400;
+  return deleteInBatches('deleteOlderThanEpoch', table, column, '< $1', cutoff, retentionDays);
 }
 
 export interface RetentionResult {
@@ -107,6 +125,7 @@ export interface RetentionResult {
   alerts: number;
   imageChecks: number;
   siteMonitorRuns: number;
+  auditLogs: number;
 }
 
 /**
@@ -121,6 +140,7 @@ export async function runRetentionCleanup(
   bandwidthRetentionDays: number,
   emailLogRetentionDays: number,
   webVitalsRetentionDays: number,
+  auditLogRetentionDays: number,
 ): Promise<RetentionResult> {
   const rowRules: Array<[keyof RetentionResult, string, string, number]> = [
     ['bandwidth', 'job_bandwidth', 'created_at', bandwidthRetentionDays],
@@ -135,16 +155,19 @@ export async function runRetentionCleanup(
     bandwidthRetentionDays,
     emailLogRetentionDays,
     webVitalsRetentionDays,
+    auditLogRetentionDays,
   });
 
   const result: RetentionResult = {
     snapshots: await cleanupOldSnapshots(snapshotRetentionDays),
     webVitals: await cleanupOldWebVitals(webVitalsRetentionDays),
-    bandwidth: 0, emailLog: 0, alerts: 0, imageChecks: 0, siteMonitorRuns: 0,
+    bandwidth: 0, emailLog: 0, alerts: 0, imageChecks: 0, siteMonitorRuns: 0, auditLogs: 0,
   };
   for (const [key, table, column, days] of rowRules) {
     result[key] = await deleteOlderThan(table, column, days);
   }
+  // audit_logs.created_at is unix seconds, not a timestamp.
+  result.auditLogs = await deleteOlderThanEpoch('audit_logs', 'created_at', auditLogRetentionDays);
 
   logger.info('DB retention cleanup complete', { operation: 'runRetentionCleanup', ...result });
   return result;

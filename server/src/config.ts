@@ -83,6 +83,10 @@ export const config = {
       if (raw !== undefined) return raw === 'true';
       return process.env.NODE_ENV === 'production';
     },
+    /** Retention window (days) for audit_logs rows. Default 365. */
+    get auditLogRetentionDays(): number {
+      return Math.max(1, Number.parseInt(process.env.AUDIT_LOG_RETENTION_DAYS || '365', 10) || 365);
+    },
     /**
      * Max rows written per batched UPSERT/INSERT during a bulk user import.
      * Bounds the unnest() array size against PostgreSQL's 65,535 bind limit.
