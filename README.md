@@ -334,7 +334,7 @@ Username and password is the default sign-in, and it stays available for everyon
 **Single sign-on (optional).** An admin connects any OpenID Connect provider (Microsoft Entra ID, Okta, Google Workspace, Keycloak, …) under **Config → Single sign-on**: issuer URL, client ID and secret, and the email domains allowed in. Register the redirect URI the panel shows with the provider. The sign-in page then offers "Sign in with <label>" next to the password form. On first SSO sign-in:
 
 - an account already connected to that identity signs in;
-- otherwise a non-admin account with the same email on an allowed domain is connected;
+- otherwise a non-admin account with the same email on an allowed domain is connected, but only when the provider marks that email verified (`email_verified: true` in the ID token);
 - otherwise a new `user` account is created for an allowed domain;
 - an admin account is never connected by email. Admins sign in with their password and use **Connect single sign-on** on their account page.
 

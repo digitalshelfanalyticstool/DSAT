@@ -68,6 +68,9 @@ export async function resolveSsoUser(db: DatabaseService, id: SsoIdentity, s: Ss
     if (byEmail.sso_issuer === id.issuer) return { error: 'not_allowed' };
     if (byEmail.role === 'admin') return { error: 'admin_link_required' };
     if (!byEmail.is_active) return { error: 'inactive' };
+    // Linking an existing account by email needs the IdP to vouch for the address;
+    // a missing or non-boolean email_verified is not that.
+    if (id.emailVerified !== true) return { error: 'not_allowed' };
     await setUserFields(db, byEmail.id, { sso_issuer: id.issuer, sso_subject: id.subject });
     logger.info('Linked existing account to SSO identity', { operation: 'resolveSsoUser', userId: byEmail.id });
     return { userId: byEmail.id };
