@@ -294,6 +294,8 @@ async function fireScheduledJobOnce(
       brand: schedule.brand,
       userId: String(schedule.user_id),
       scheduleId: schedule.id,
+      // A due run is never dropped for its owner's backlog; it still counts.
+      bypassActiveLimit: true,
     });
 
     await variant.runPostFireUpdate(db);

@@ -429,6 +429,17 @@ export const config = {
   },
 
   jobs: {
+    /**
+     * Queued + running scrape jobs one user may have before creating,
+     * restarting or continuing another is refused with 429. Scheduled runs
+     * and admin backfill are exempt but still count. Default 10: a typical
+     * multi-brand batch fits, and one account can't take most of the
+     * default 26 worker slots (WORKER_CONCURRENCY 13 x EXPECTED_WORKERS 2).
+     */
+    get maxActivePerUser(): number {
+      const raw = Number.parseInt(process.env.MAX_ACTIVE_JOBS_PER_USER || '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 10;
+    },
     get jobTimeoutMs(): number {
       return Number.parseInt(process.env.JOB_TIMEOUT_MS || String(60 * 60 * 1000), 10);
     },

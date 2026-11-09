@@ -20,7 +20,7 @@ import { previewSite } from '../services/site-preview';
 import { fetchViaUnlocker } from '../scrapers/page-fetcher';
 import { FetchError } from '../scrapers/fetch-failure';
 import { deriveDisplayName, deriveSiteName } from '../services/site-onboarding';
-import { createJob } from '../services/job-lifecycle';
+import { createJob, JobLifecycleError } from '../services/job-lifecycle';
 import { httpError } from '../utils/async-handler';
 
 const logger = createLogger('config-routes');
@@ -332,7 +332,7 @@ router.post('/sites/onboard', validate(onboardSchemas), asyncHandler(async (req:
   }
 
   const job = await createJob({ site: siteName, brand: brandConfig.name, userId: String(req.user!.id) })
-    .catch((err: unknown) => { throw httpError(err, 400); });
+    .catch((err: unknown) => { throw err instanceof JobLifecycleError ? err : httpError(err, 400); });
 
   logger.info('Retailer onboarded', { operation: 'onboardSite', site: siteName, brand: brandConfig.name, jobId: job.job_id, reused: Boolean(existing) });
   res.status(201).json({ success: true, site, brand: brandConfig, job_id: job.job_id, reused_site: Boolean(existing) });

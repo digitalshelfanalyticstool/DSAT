@@ -442,6 +442,8 @@ Swagger UI is available at `http://localhost:3001/api-docs` when the server is r
 
 Rate limits are configurable via `RATE_LIMIT_API_MAX`, `RATE_LIMIT_AUTH_MAX`, `RATE_LIMIT_REFRESH_MAX` and `RATE_LIMIT_ADMIN_MAX`.
 
+Each user, admins included, may have `MAX_ACTIVE_JOBS_PER_USER` (default 10) queued or running scrape jobs. Creating, restarting or continuing one past that returns 429. Scheduled runs and admin backfill are never refused but still count toward their owner's total.
+
 The analytics overview (`/api/analytics/overview`) accepts ranges of up to `ANALYTICS_MAX_RANGE_DAYS` (default 366) whole UTC days and computes at most `ANALYTICS_OVERVIEW_CONCURRENCY` (default 1) uncached aggregations at once per API process. Up to `ANALYTICS_OVERVIEW_QUEUE_MAX` (default 10) more wait for a slot; beyond that the request gets 503 with `Retry-After`. Identical requests share one computation, and `site`/`brand` must be configured names.
 
 Scraping concurrency per retailer is separate: `RATE_LIMIT_MAX_CONCURRENT` (default 15) or `RATE_LIMIT_<SITE>_MAX_CONCURRENT`, shared by all workers through Redis. A slot held by a worker that crashes frees itself after `RATE_LIMIT_LEASE_TTL_MS`.

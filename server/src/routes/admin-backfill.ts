@@ -33,7 +33,8 @@ router.post('/image-urls', asyncHandler(async (req: AuthenticatedRequest, res) =
     // Each pair becomes an ordinary job owned by the requesting admin. A pair
     // whose site or brand is no longer enabled is rejected and skipped.
     const enqueueScrapeJob = async (params: { retailer: string; brand: string; reason: string }): Promise<void> => {
-      await createJob({ site: params.retailer, brand: params.brand, userId: String(req.user!.id) });
+      // An admin's explicit bulk re-scrape; the per-user active-job limit would cut it short.
+      await createJob({ site: params.retailer, brand: params.brand, userId: String(req.user!.id), bypassActiveLimit: true });
     };
 
     const db = await DatabaseService.getInstance();

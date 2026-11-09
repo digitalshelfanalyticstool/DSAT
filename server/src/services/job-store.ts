@@ -8,7 +8,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { DatabaseService } from './database';
+import { DatabaseService, type TransactionClient } from './database';
 import { createLogger } from '../utils/logger';
 import { stripTotalCount } from './strip-total-count';
 
@@ -205,11 +205,37 @@ function buildUpdate(updates: Record<string, unknown>, jobId: string): { sql: st
 
 // --- JobStore class ---
 
-export class JobStore {
-  private readonly db: DatabaseService;
+/** Namespace for the two-key advisory lock taken per user in withUserLock. */
+const USER_JOBS_LOCK_NS = 0x4a4f4253; // 'JOBS'
 
-  constructor(db: DatabaseService) {
+export class JobStore {
+  private readonly db: DatabaseService | TransactionClient;
+
+  constructor(db: DatabaseService | TransactionClient) {
     this.db = db;
+  }
+
+  /**
+   * Run `fn` in a transaction holding a per-user advisory lock, with a store
+   * bound to that transaction. Serializes a user's check-then-write sequences
+   * (count active jobs, then insert) so a burst can't overshoot a limit.
+   */
+  async withUserLock<T>(userId: string, fn: (store: JobStore) => Promise<T>): Promise<T> {
+    if (!('transaction' in this.db)) throw new Error('withUserLock cannot nest');
+    return this.db.transaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock($1, $2)', [USER_JOBS_LOCK_NS, Number.parseInt(userId, 10)]);
+      return fn(new JobStore(tx));
+    });
+  }
+
+  /** How many of a user's jobs are in one of `states`. */
+  async countForUser(userId: string, states: readonly JobState[]): Promise<number> {
+    const row = await this.db.get<{ n: number }>(
+      'SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1 AND status = ANY($2::text[])',
+      Number.parseInt(userId, 10),
+      [...states],
+    );
+    return row?.n ?? 0;
   }
 
   /**
