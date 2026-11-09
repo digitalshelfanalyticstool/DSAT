@@ -22,9 +22,10 @@ import { authMiddleware } from '../middleware/auth';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { validate, type ValidatedRequest } from '../middleware/validate';
 import { errorResponse } from '../utils/error-response';
-import { asyncHandler } from '../utils/async-handler';
+import { asyncHandler, httpError } from '../utils/async-handler';
 import { createLogger } from '../utils/logger';
 import { getCachedOrFetch } from '../services/redis-cache';
+import { getSites, getBrands } from '../services/config-manager';
 import { isOwnerOrAdmin } from '../services/user-records';
 import { diffRunPairs, sumRunDiffs, snapshotWindow, type RunRef } from '../services/run-diff';
 
@@ -390,8 +391,14 @@ const overviewQuerySchema = z
   );
 
 // Bounds how many overview aggregations hit the shared pool at once, however
-// many distinct cache keys the requests use.
-const overviewLimiter = new Bottleneck({ maxConcurrent: config.analytics.overviewConcurrency });
+// many distinct cache keys the requests use. Misses past the queue cap are
+// dropped (OVERFLOW) and answered 503 rather than piling up.
+const overviewLimiter = new Bottleneck({
+  maxConcurrent: config.analytics.overviewConcurrency,
+  highWater: config.analytics.overviewQueueMax,
+  strategy: Bottleneck.strategy.OVERFLOW,
+});
+const OVERVIEW_BUSY_RETRY_AFTER_SECS = 5;
 const overviewSchemas = { query: overviewQuerySchema };
 
 /**
@@ -422,11 +429,22 @@ router.get(
 
     const userId = req.user!.id;
 
+    // Only configured names (enabled or not) reach the cache key, so the key
+    // space stays bounded; anything else could only match no rows.
+    if (site !== undefined && !(await getSites()).some((s) => s.name === site)) {
+      res.status(400).json(errorResponse(`Unknown site "${site.slice(0, 100)}"`, 'validation_error'));
+      return;
+    }
+    if (brand !== undefined && !(await getBrands()).some((b) => b.name === brand)) {
+      res.status(400).json(errorResponse(`Unknown brand "${brand.slice(0, 100)}"`, 'validation_error'));
+      return;
+    }
+
     // Cache the ~9-query aggregation. Key is derived from the exact
     // filter params the handler reads ({from,to,site,brand}); a cache hit
     // returns the identical `analytics` payload a miss would compute.
     const cacheKey = `cache:analytics:overview:${fromDate.toISOString()}:${toDate.toISOString()}:${site ?? ''}:${brand ?? ''}`;
-    const analytics = await getCachedOrFetch(cacheKey, OVERVIEW_CACHE_TTL_SECS, () => overviewLimiter.schedule(async () => {
+    const analytics = await getCachedOrFetch(cacheKey, OVERVIEW_CACHE_TTL_SECS, async () => {
     const { prevFrom, prevTo } = calcComparisonRange(fromDate, toDate);
 
     const db = await DatabaseService.getInstance();
@@ -722,7 +740,13 @@ router.get(
         colors: row.colors ? row.colors.split(', ').filter(Boolean) : [],
       })),
     };
-    }));
+    }, (fn) => overviewLimiter.schedule(fn)).catch((err: unknown) => {
+      if (!(err instanceof Bottleneck.BottleneckError)) throw err;
+      res.set('Retry-After', String(OVERVIEW_BUSY_RETRY_AFTER_SECS));
+      throw Object.assign(httpError(err, 503), {
+        routeFailure: { operation: 'getAnalyticsOverview', message: 'Analytics is busy. Try again in a few seconds.' },
+      });
+    });
 
     logger.info('Overview analytics fetched', {
       operation: 'getAnalyticsOverview',

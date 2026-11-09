@@ -478,6 +478,14 @@ export const config = {
       const raw = Number.parseInt(process.env.ANALYTICS_OVERVIEW_CONCURRENCY || '', 10);
       return Number.isFinite(raw) && raw > 0 ? raw : 1;
     },
+    /**
+     * Uncached overview requests that may wait for a slot per API process.
+     * Beyond it a request gets 503 + Retry-After instead of queueing.
+     */
+    get overviewQueueMax(): number {
+      const raw = Number.parseInt(process.env.ANALYTICS_OVERVIEW_QUEUE_MAX || '', 10);
+      return Number.isFinite(raw) && raw >= 0 ? raw : 10;
+    },
   },
 
   alerts: {
