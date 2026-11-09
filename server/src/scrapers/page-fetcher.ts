@@ -376,7 +376,36 @@ function classifyUnlockerOutcome(result: FetchResult): UnlockerOutcome {
   return 'error';
 }
 
-/** One fetch attempt through the active provider, with timeout. Failures are returned, not thrown. */
+class BodyTooLargeError extends Error {}
+
+/**
+ * The decoded body as UTF-8 text (what `response.text()` gives), failing once
+ * it passes `maxBytes`. A compressed body is decoded before it reaches us, so
+ * only the decoded size is a real bound.
+ */
+async function readBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    bytes += value.byteLength;
+    if (bytes > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new BodyTooLargeError(`Response body exceeded ${maxBytes} bytes`);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
+/**
+ * One fetch attempt through the active provider. `timeoutMs` covers the body
+ * as well as the headers, and the body is size-capped. Failures are returned,
+ * not thrown.
+ */
 async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: string | undefined, render: boolean): Promise<FetchResult> {
   const provider = await getActiveProvider();
   const capabilities = providerFor(provider);
@@ -405,10 +434,8 @@ async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: 
       const response = fetched.response;
       requestBody = fetched.requestBody ?? '';
 
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
-        const body = await response.text().catch(() => '');
+        const body = await readBodyCapped(response, config.scraping.maxBodyBytes).catch(() => '');
         if (tracksBandwidth) trackBandwidth(jobId, requestBody, body);
         return {
           url,
@@ -419,12 +446,14 @@ async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: 
         };
       }
 
-      const html = await response.text();
+      const html = await readBodyCapped(response, config.scraping.maxBodyBytes);
       if (tracksBandwidth) trackBandwidth(jobId, requestBody, html);
       return { url, success: true, content: html };
     } catch (err) {
-      clearTimeout(timeoutId);
       if (tracksBandwidth) trackBandwidth(jobId, requestBody, null);
+      if (err instanceof BodyTooLargeError) {
+        return { url, success: false, content: '', error: err.message, failure: { kind: 'network' } };
+      }
 
       if (err instanceof Error && err.name === 'AbortError') {
         return {
@@ -436,6 +465,8 @@ async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: 
         };
       }
       throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

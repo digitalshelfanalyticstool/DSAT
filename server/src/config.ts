@@ -395,6 +395,16 @@ export const config = {
       if (Number.isNaN(parsed) || parsed < 1_000 || parsed > 600_000) return 30_000;
       return parsed;
     },
+    /**
+     * Largest decoded page body a scrape fetch will read before failing it.
+     * Default 10 MB: heavy retailer pages and JSON APIs run to a few MB, and
+     * a gzip/br body can expand a thousandfold, so this bounds memory per
+     * in-flight fetch (UNLOCKER_CONCURRENCY of them per worker).
+     */
+    get maxBodyBytes(): number {
+      const parsed = Number.parseInt(process.env.SCRAPER_MAX_BODY_BYTES ?? '', 10);
+      return Number.isNaN(parsed) || parsed < 1 ? 10 * 1024 * 1024 : parsed;
+    },
     get dataDir(): string {
       return process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
     },
