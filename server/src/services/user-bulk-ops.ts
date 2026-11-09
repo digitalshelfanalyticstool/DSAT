@@ -15,6 +15,7 @@ import { validatePasswordStrength } from '../utils/password-validator.js';
 import type { AuditLogger, AuditRequestContext } from './audit-service';
 import { hashPassword, validateEmail, validateUsername } from './user-records';
 import { invalidateUserCache } from './user-cache';
+import { revokeAccountAccess } from './user-manager';
 
 const logger = createLogger('user-bulk-ops');
 
@@ -161,6 +162,7 @@ async function flushUpdates(
       ids, usernames, roles, isActives, updatedAts,
     );
   }
+  await revokeAccountAccess(tx, updates.filter((u) => u.isActive === 0).map((u) => u.id), now);
 }
 
 /**
