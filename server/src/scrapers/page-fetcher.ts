@@ -412,6 +412,7 @@ async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: 
   const missing = capabilities.missingConfig?.(provider);
   if (missing) return { url, success: false, content: '', error: missing, failure: { kind: 'config' } };
   const tracksBandwidth = capabilities.billsBandwidth;
+  const allowedPrivateHosts = config.scrapingProvider.allowedPrivateHosts;
   let requestBody = '';
 
   try {
@@ -422,7 +423,7 @@ async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: 
       // A plain proxy cannot run JavaScript, so its renders use a pooled browser
       // rather than one launched per request. Some providers render on their side.
       const fetched = render && !capabilities.rendersRemotely
-        ? { response: await withBrowser((browser) => renderPage(browser, url, timeoutMs, controller.signal)) }
+        ? { response: await withBrowser((browser) => renderPage(browser, url, timeoutMs, controller.signal, allowedPrivateHosts)) }
         : await fetchHtml(provider, url, {
           timeoutMs,
           render,
@@ -430,6 +431,7 @@ async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: 
           headers: { 'Accept-Encoding': 'gzip, br' },
           signal: controller.signal,
           dispatcher: unlockerDispatcher,
+          allowedPrivateHosts,
         });
       const response = fetched.response;
       requestBody = fetched.requestBody ?? '';
@@ -437,11 +439,16 @@ async function fetchViaUnlockerOnceInner(url: string, timeoutMs: number, jobId: 
       if (!response.ok) {
         const body = await readBodyCapped(response, config.scraping.maxBodyBytes).catch(() => '');
         if (tracksBandwidth) trackBandwidth(jobId, requestBody, body);
+        // The body can come from wherever a redirect led, so it stays in the
+        // server log and out of the error, which reaches job owners.
+        logger.warn('Fetch returned non-2xx', {
+          operation: 'fetchViaUnlocker', url, status: response.status, body: body.slice(0, 200),
+        });
         return {
           url,
           success: false,
           content: '',
-          error: `Web Unlocker returned ${response.status}: ${body.slice(0, 200)}`,
+          error: `Web Unlocker returned ${response.status}`,
           failure: { kind: 'http', status: response.status },
         };
       }

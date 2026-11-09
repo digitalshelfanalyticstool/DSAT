@@ -179,6 +179,14 @@ export const config = {
       const parsed = Number.parseInt(process.env.SCRAPING_PROVIDER_CACHE_TTL_MS ?? '', 10);
       return Number.isNaN(parsed) || parsed < 0 ? 30_000 : parsed;
     },
+    /**
+     * Hostnames scrape fetches may reach even though they resolve to a
+     * loopback, private or link-local address (SCRAPER_ALLOWED_PRIVATE_HOSTS,
+     * comma-separated, exact match). Empty by default: every such hop fails.
+     */
+    get allowedPrivateHosts(): string[] {
+      return (process.env.SCRAPER_ALLOWED_PRIVATE_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+    },
     /** URL fetched by "Test connection" for Direct and Apify; should echo the egress IP. */
     get testUrl(): string {
       return process.env.SCRAPING_PROVIDER_TEST_URL || 'https://api.ipify.org?format=json';

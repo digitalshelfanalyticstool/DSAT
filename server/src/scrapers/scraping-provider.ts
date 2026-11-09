@@ -9,14 +9,19 @@
  *  - firecrawl  — Firecrawl's /v2/scrape API (hosted, or self-hosted via apiUrl);
  *                 renders on its side, so local browsers launch without a proxy
  *
- * Zero project imports on purpose:
+ * Imports only zero-import leaves (the destination guard), on purpose:
  * settings arrive as an argument, so this module can be imported from
  * anywhere without cycles.
+ *
+ * Retailer URLs and redirects are untrusted. The direct and proxy paths follow
+ * redirects themselves and check every hop with the destination guard; the
+ * local browser checks every request it makes.
  */
 
 import { createHash } from 'node:crypto';
-import { chromium, type Browser, type LaunchOptions } from 'playwright-core';
-import { fetch, ProxyAgent, Response, type Dispatcher } from 'undici';
+import { chromium, type Browser, type LaunchOptions, type Page } from 'playwright-core';
+import { Agent, fetch, ProxyAgent, Response, type Dispatcher } from 'undici';
+import { assertPublicDestination, publicOnlyLookup } from './destination-guard';
 
 export type ProviderSettings =
   | { kind: 'direct'; proxyUrl?: string }
@@ -34,6 +39,8 @@ export interface HttpFetchOptions {
   debug?: boolean;
   /** Bright Data only: connection pool for api.brightdata.com. */
   dispatcher?: Dispatcher;
+  /** Hostnames the direct/proxy/browser paths may reach even on a non-public address. */
+  allowedPrivateHosts?: readonly string[];
 }
 
 export interface HttpFetchResponse {
@@ -46,6 +53,7 @@ export const BRIGHTDATA_REQUEST_URL = 'https://api.brightdata.com/request';
 const APIFY_PROXY_HOST = 'proxy.apify.com:8000';
 export const FIRECRAWL_API_URL = 'https://api.firecrawl.dev';
 const RENDER_SETTLE_MS = 3_000;
+const MAX_REDIRECTS = 5;
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -97,6 +105,37 @@ function proxyAgent(proxyUrl: string): ProxyAgent {
   return agent;
 }
 
+// One agent per allowlist; its lookup refuses non-public addresses at connect
+// time, so a name that re-resolves inward after the per-hop check still fails.
+const guardedAgents = new Map<string, Agent>();
+function guardedAgent(allowed: readonly string[] | undefined): Agent {
+  const key = (allowed ?? []).join(',');
+  let agent = guardedAgents.get(key);
+  if (!agent) {
+    agent = new Agent({ connect: { lookup: publicOnlyLookup(allowed) } });
+    guardedAgents.set(key, agent);
+  }
+  return agent;
+}
+
+/**
+ * Fail every browser request (navigation, each redirect hop, subresources) to a
+ * non-public destination. Raw CDP Fetch, because Playwright's page.route does
+ * not see redirect hops. The browser resolves names itself, so a name that
+ * re-resolves inward between check and connect is not caught here.
+ */
+async function guardBrowserRequests(page: Page, allowed: readonly string[] | undefined): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  cdp.on('Fetch.requestPaused', (e) => {
+    const check = /^https?:/i.test(e.request.url) ? assertPublicDestination(e.request.url, allowed) : Promise.resolve();
+    check.then(
+      () => cdp.send('Fetch.continueRequest', { requestId: e.requestId }),
+      () => cdp.send('Fetch.failRequest', { requestId: e.requestId, errorReason: 'BlockedByClient' }),
+    ).catch(() => undefined); // the page closed under us
+  });
+  await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+}
+
 export async function openBrowser(s: ProviderSettings, connectTimeoutMs: number): Promise<Browser> {
   try {
     // Remote-rendering providers (Bright Data, Firecrawl) never reach here from
@@ -117,13 +156,17 @@ export async function openBrowser(s: ProviderSettings, connectTimeoutMs: number)
  * origin's real status (a block page or 404 must not read as success). Closes
  * the page, not the browser, so callers can pool browsers.
  */
-export async function renderPage(browser: Browser, url: string, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
+export async function renderPage(
+  browser: Browser, url: string, timeoutMs: number, signal?: AbortSignal, allowedPrivateHosts?: readonly string[],
+): Promise<Response> {
   const aborted = () => Object.assign(new Error('Render aborted'), { name: 'AbortError' });
-  const page = await browser.newPage();
+  // Service workers make requests the page's CDP session cannot see.
+  const page = await browser.newPage({ serviceWorkers: 'block' });
   const onAbort = () => { void page.close().catch(() => undefined); };
   signal?.addEventListener('abort', onAbort, { once: true });
   try {
     if (signal?.aborted) throw aborted();
+    await guardBrowserRequests(page, allowedPrivateHosts);
     // Retail pages keep long-polling, so networkidle often never arrives; wait
     // for the DOM, then give client-side rendering a moment.
     const nav = await page.goto(url, { timeout: timeoutMs, waitUntil: 'domcontentloaded' });
@@ -141,7 +184,7 @@ export async function renderPage(browser: Browser, url: string, timeoutMs: numbe
 async function renderInBrowser(s: ProviderSettings, url: string, o: HttpFetchOptions): Promise<Response> {
   const browser = await openBrowser(s, o.timeoutMs);
   try {
-    return await renderPage(browser, url, o.timeoutMs, o.signal);
+    return await renderPage(browser, url, o.timeoutMs, o.signal, o.allowedPrivateHosts);
   } finally {
     await browser.close().catch(() => undefined);
   }
@@ -236,13 +279,24 @@ export async function fetchHtml(s: ProviderSettings, url: string, o: HttpFetchOp
     // A plain proxy cannot execute JavaScript; render requests need a real browser.
     if (o.render) return { response: await renderInBrowser(s, url, o) };
 
+    // Behind a proxy the proxy resolves names, so only the per-hop check applies.
     const proxyUrl = proxyUrlFor(s);
-    const response = await fetch(url, {
-      headers: { 'User-Agent': DEFAULT_USER_AGENT, ...o.headers },
-      signal: o.signal,
-      dispatcher: proxyUrl ? proxyAgent(proxyUrl) : undefined,
-    });
-    return { response };
+    const dispatcher = proxyUrl ? proxyAgent(proxyUrl) : guardedAgent(o.allowedPrivateHosts);
+    let current = url;
+    for (let hop = 0; ; hop++) {
+      await assertPublicDestination(current, o.allowedPrivateHosts);
+      const response = await fetch(current, {
+        headers: { 'User-Agent': DEFAULT_USER_AGENT, ...o.headers },
+        signal: o.signal,
+        dispatcher,
+        redirect: 'manual',
+      });
+      const location = response.headers.get('location');
+      if (response.status < 300 || response.status >= 400 || !location) return { response };
+      await response.body?.cancel().catch(() => undefined);
+      if (hop >= MAX_REDIRECTS) throw new Error(`Too many redirects (more than ${MAX_REDIRECTS})`);
+      current = new URL(location, current).toString();
+    }
   } catch (err) {
     throw redactError(err);
   }
