@@ -54,7 +54,7 @@ async function countFailedJobs(db: DatabaseService): Promise<number> {
 
 async function loadAdminEmails(db: DatabaseService): Promise<string[]> {
   const rows = await db.all<AdminRow>(
-    `SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL`,
+    `SELECT email FROM users WHERE role = 'admin' AND is_active = 1 AND email IS NOT NULL`,
   );
   return rows.map((r) => r.email).filter((e) => e?.includes('@'));
 }

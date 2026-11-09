@@ -327,7 +327,8 @@ export async function checkAndFireDueSchedules(): Promise<void> {
   const currentTime = `${eastern.hh}:${eastern.mm}`;
 
   const schedules = await db.all<ScheduledJob>(
-    'SELECT * FROM scheduled_jobs WHERE enabled = 1 AND schedule_time = $1',
+    `SELECT s.* FROM scheduled_jobs s JOIN users u ON u.id = s.user_id
+     WHERE s.enabled = 1 AND u.is_active = 1 AND s.schedule_time = $1`,
     currentTime,
   );
 
@@ -357,11 +358,11 @@ export async function checkAndFireDueSchedules(): Promise<void> {
   // --- Retry check: fire pending retries for failed scheduled jobs ---
   const nowMs = now.getTime();
   const retrySchedules = await db.all<ScheduledJob>(
-    `SELECT * FROM scheduled_jobs
-     WHERE enabled = 1
-       AND next_retry_at IS NOT NULL
-       AND next_retry_at <= $1
-       AND current_retry_count < max_retries`,
+    `SELECT s.* FROM scheduled_jobs s JOIN users u ON u.id = s.user_id
+     WHERE s.enabled = 1 AND u.is_active = 1
+       AND s.next_retry_at IS NOT NULL
+       AND s.next_retry_at <= $1
+       AND s.current_retry_count < s.max_retries`,
     nowMs,
   );
 

@@ -23,6 +23,27 @@ export { UserManagerError, validateEmail, validateUsername };
 
 const logger = createLogger('user-manager');
 
+/**
+ * End a deactivated account's access: revoke its refresh tokens and stop its
+ * schedules (including any pending retry). `scheduled_jobs.updated_at` is in
+ * milliseconds, `refresh_tokens.revoked_at` in seconds.
+ */
+export async function revokeAccountAccess(
+  db: { run(sql: string, ...p: unknown[]): Promise<unknown> },
+  userIds: number[],
+  nowSec: number,
+): Promise<void> {
+  if (userIds.length === 0) return;
+  await db.run(
+    'UPDATE refresh_tokens SET revoked_at = $1 WHERE user_id = ANY($2::int[]) AND revoked_at IS NULL',
+    nowSec, userIds,
+  );
+  await db.run(
+    'UPDATE scheduled_jobs SET enabled = 0, next_retry_at = NULL, updated_at = $1 WHERE user_id = ANY($2::int[]) AND enabled = 1',
+    nowSec * 1000, userIds,
+  );
+}
+
 // --- Types ---
 
 export interface CreateUserInput {
@@ -246,6 +267,10 @@ export async function updateUser(
     );
   }
 
+  if (updates.is_active === false) {
+    await revokeAccountAccess(db, [userId], Math.floor(Date.now() / 1000));
+  }
+
   if (audit) {
     const changedFields = Object.keys(updates).filter(k => k !== 'password');
     if (updates.password !== undefined) changedFields.push('password');
@@ -270,7 +295,7 @@ export async function updateUser(
 /**
  * Soft-delete a user (set is_active to 0). Admin-only operation.
  * Prevents an admin from deleting their own account (returns 400).
- * All refresh tokens for the deleted user are cascade-deleted.
+ * Revokes the user's refresh tokens and disables their schedules.
  * @param db - Database service instance
  * @param userId - ID of the user to soft-delete
  * @param adminUserId - ID of the admin performing the action
@@ -298,8 +323,7 @@ export async function deleteUser(
   const now = Math.floor(Date.now() / 1000);
   await db.run('UPDATE users SET is_active = 0, updated_at = $1 WHERE id = $2', now, userId);
 
-  // Cascade delete refresh tokens
-  await db.run('DELETE FROM refresh_tokens WHERE user_id = $1', userId);
+  await revokeAccountAccess(db, [userId], now);
 
   if (audit) {
     await audit.log({
@@ -399,6 +423,8 @@ export async function lockUser(
     'UPDATE users SET is_active = 0, locked_until = $1, updated_at = $2 WHERE id = $3 RETURNING *',
     MANUAL_LOCK_UNTIL, now, userId,
   ))!;
+
+  await revokeAccountAccess(db, [userId], now);
 
   if (audit) {
     await audit.log({

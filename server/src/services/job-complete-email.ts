@@ -56,7 +56,7 @@ export async function sendJobCompleteEmail(
   }
 
   const userRow = await db.get<UserRow>(
-    `SELECT email, username FROM users WHERE id = $1`,
+    `SELECT email, username FROM users WHERE id = $1 AND is_active = 1`,
     jobRow.user_id,
   );
   if (!userRow || !userRow.email || !userRow.email.includes('@')) {
