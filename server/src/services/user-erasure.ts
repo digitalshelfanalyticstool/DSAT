@@ -48,13 +48,18 @@ export async function eraseUserPersonalData(
   const nowSec = Math.floor(Date.now() / 1000);
 
   await db.transaction(async (tx) => {
-    await tx.run(
+    // Re-check the preconditions in the same statement, so a concurrent
+    // reactivation or promotion cannot slip in between the check and the erase.
+    const res = await tx.run(
       `UPDATE users SET username = $1, email = $2, password_hash = $3,
          sso_issuer = NULL, sso_subject = NULL, last_login = NULL,
          must_change_password = 0, failed_login_attempts = 0, updated_at = $4
-       WHERE id = $5`,
+       WHERE id = $5 AND is_active = 0 AND role <> 'admin'`,
       `${ERASED_PREFIX}${userId}`, `${ERASED_PREFIX}${userId}@erased.invalid`, passwordHash, nowSec, userId,
     );
+    if (res.changes === 0) {
+      throw new UserManagerError('User changed while erasing; try again', 409);
+    }
     await tx.run('DELETE FROM refresh_tokens WHERE user_id = $1', userId);
     // scheduled_jobs.updated_at is in milliseconds.
     await tx.run(
