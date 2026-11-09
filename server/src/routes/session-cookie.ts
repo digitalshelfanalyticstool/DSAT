@@ -29,6 +29,7 @@ export function setSessionCookie(res: Response, refreshToken: string): void {
 
 export function clearSessionCookie(res: Response): void {
   res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
+  res.clearCookie('bull_board_token', cookieOptions('/admin/queues'));
 }
 
 export function readSessionCookie(req: Request): string | undefined {

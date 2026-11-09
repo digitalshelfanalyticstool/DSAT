@@ -310,14 +310,11 @@ router.get('/import-template', asyncHandler(async (_req: AuthenticatedRequest, r
   });
   headerRow.commit();
 
-  // Sample row — placeholder password for the template, not a real credential
-  // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- template Excel sample written into a downloadable workbook; not a runtime credential
-  const samplePassword = 'Welcome123!'; // NOSONAR — template example, not a hardcoded credential
-  sheet.addRow({ username: 'jsmith', email: 'jsmith@example.com', role: 'user', password: samplePassword });
+  sheet.addRow({ username: 'jsmith', email: 'jsmith@example.com', role: 'user', password: '' });
 
   // Add note to password header cell
   const pwHeader = sheet.getCell('D1');
-  pwHeader.note = 'Optional. If omitted, a random password is generated. All new users must change their password on first login.';
+  pwHeader.note = 'Optional. If omitted, a random password is generated. New non-admin users must change their password on first login.';
 
   // Instructions sheet
   const instructions = workbook.addWorksheet('Instructions');
@@ -334,11 +331,11 @@ router.get('/import-template', asyncHandler(async (_req: AuthenticatedRequest, r
     ['username', 'Required. 3-50 characters. Must be unique.'],
     ['email', 'Required. Must be a valid email. Used to match existing users for updates.'],
     ['role', 'Optional. "user" (default) or "admin".'],
-    ['password', 'Optional. Minimum 8 characters. If omitted, a random password is generated.'],
+    ['password', 'Optional. At least 12 characters, with upper and lower case, a digit and a symbol. If omitted, a random password is generated.'],
     ['', ''],
     ['Notes', ''],
-    ['Default password', 'Set the password column to a shared temporary password (e.g. Welcome123!) for all new users.'],
-    ['First login', 'All imported users are required to change their password on first login.'],
+    ['Default password', 'Set the password column to a shared temporary password for all new users.'],
+    ['First login', 'Imported non-admin users are required to change their password on first login.'],
     ['Existing users', 'If the email matches an existing user, their username and role are updated. Password is not changed.'],
     ['Errors', 'Rows with errors are skipped. The import result shows which rows failed and why.'],
   ];
