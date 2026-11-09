@@ -17,7 +17,7 @@ import type { UserRow, UserResponse } from './auth-service';
 export type { UserResponse };
 import { invalidateUserCache } from './user-cache';
 import type { AuditLogger, AuditRequestContext } from './audit-service';
-import { MANUAL_LOCK_UNTIL, UserManagerError, hashPassword, mustChangePasswordOnCreate, toUserResponse, validateEmail, validateUsername } from './user-records';
+import { MANUAL_LOCK_UNTIL, UserManagerError, hashPassword, isErasedUsername, mustChangePasswordOnCreate, toUserResponse, validateEmail, validateUsername } from './user-records';
 
 export { UserManagerError, validateEmail, validateUsername };
 
@@ -200,6 +200,9 @@ async function validateAndApplyUpdates(
   const existing = await db.get<UserRow>('SELECT * FROM users WHERE id = $1', userId);
   if (!existing) {
     throw new UserManagerError('User not found', 404);
+  }
+  if (isErasedUsername(existing.username)) {
+    throw new UserManagerError('User has been erased', 409);
   }
 
   if (updates.username !== undefined) {
@@ -458,6 +461,9 @@ export async function unlockUser(
   const existing = await db.get<UserRow>('SELECT * FROM users WHERE id = $1', userId);
   if (!existing) {
     throw new UserManagerError('User not found', 404);
+  }
+  if (isErasedUsername(existing.username)) {
+    throw new UserManagerError('User has been erased', 409);
   }
 
   if (existing.locked_until === null) {

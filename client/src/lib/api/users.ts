@@ -88,6 +88,15 @@ export const usersApi = {
     });
   },
 
+  async eraseAdminUser(userId: number) {
+    return http.request<{
+      success: true;
+      message: string;
+    }>(`/admin/users/${userId}/erase`, {
+      method: 'POST',
+    });
+  },
+
   async getAuditLogs(filters?: {
     user_id?: number;
     action?: string;

@@ -17,6 +17,13 @@ export class UserManagerError extends Error {
 export const USERNAME_MIN = 3;
 export const USERNAME_MAX = 50;
 
+/** Usernames with this prefix mark erased accounts; nobody may choose one. */
+export const ERASED_PREFIX = 'erased-';
+
+export function isErasedUsername(username: string): boolean {
+  return username.toLowerCase().startsWith(ERASED_PREFIX);
+}
+
 export function validateUsername(username: string): void {
   if (!username || typeof username !== 'string') {
     throw new UserManagerError('Username is required', 400);
@@ -27,6 +34,9 @@ export function validateUsername(username: string): void {
   }
   if (trimmed.length > USERNAME_MAX) {
     throw new UserManagerError(`Username must be at most ${USERNAME_MAX} characters`, 400);
+  }
+  if (isErasedUsername(trimmed)) {
+    throw new UserManagerError(`Username cannot start with "${ERASED_PREFIX}"`, 400);
   }
 }
 
