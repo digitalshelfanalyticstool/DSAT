@@ -6,7 +6,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { authMiddleware, sseAuthMiddleware, requireRole } from '../middleware/auth';
+import { authMiddleware, sseAuthMiddleware, requireRole, isActiveAdmin } from '../middleware/auth';
+import type { AuthenticatedRequest } from '../middleware/auth';
 import { validate, type ValidatedRequest } from '../middleware/validate';
 import { DatabaseService } from '../services/database';
 import { runMonitor, startMonitorRun, getMonitorSchedule, type MonitorScheduleConfig } from '../services/site-monitor-runner';
@@ -29,6 +30,9 @@ const runIdParamSchema = z.object({
 });
 const runIdSchemas = { params: runIdParamSchema };
 
+/** How often an open run stream re-checks that its subscriber is still an admin. */
+const ADMIN_RECHECK_MS = 5_000;
+
 /**
  * GET /api/site-monitor/runs/:runId/stream
  * SSE stream of live progress events for a monitor run.
@@ -46,7 +50,7 @@ router.get(
   sseAuthMiddleware,
   requireRole('admin'),
   validate(runIdSchemas),
-  asyncHandler(async (req: ValidatedRequest<typeof runIdSchemas>, res) => {
+  asyncHandler(async (req: ValidatedRequest<typeof runIdSchemas, AuthenticatedRequest>, res) => {
     const { runId } = req.params;
     const db = await DatabaseService.getInstance();
 
@@ -79,8 +83,16 @@ router.get(
 
     // Subscribe to Redis Pub/Sub monitor progress channel
     let subscribed = true;
+    // Events that arrive while an authorization re-check is in flight wait for it.
+    let rechecking = false;
+    const held: MonitorProgressEvent[] = [];
 
     const progressHandler = (event: MonitorProgressEvent): void => {
+      if (!subscribed) return;
+      if (rechecking) {
+        held.push(event);
+        return;
+      }
       try {
         sendSSEEvent(res, 'progress', event);
 
@@ -99,10 +111,30 @@ router.get(
     // Heartbeat to keep connection alive through proxies
     const heartbeatTimer = startHeartbeat(res);
 
+    // Close the stream if the subscriber stops being an active admin.
+    const userId = req.user!.id;
+    const authTimer = setInterval(() => {
+      if (rechecking) return;
+      rechecking = true;
+      void isActiveAdmin(userId).then((ok) => {
+        rechecking = false;
+        if (!subscribed) return;
+        if (!ok) {
+          held.length = 0;
+          sendSSEEvent(res, 'unauthorized', { message: 'Access revoked' });
+          cleanup();
+          res.end();
+          return;
+        }
+        for (const event of held.splice(0)) progressHandler(event);
+      });
+    }, ADMIN_RECHECK_MS);
+
     const cleanup = (): void => {
       if (!subscribed) return;
       subscribed = false;
       clearInterval(heartbeatTimer);
+      clearInterval(authTimer);
       disposeProgress().catch((err) => {
         logger.warn('Failed to unsubscribe from monitor progress channel', {
           operation: 'monitorStream',

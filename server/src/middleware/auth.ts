@@ -202,6 +202,27 @@ export async function sseAuthMiddleware(
   next();
 }
 
+/**
+ * Re-check for long-lived admin streams: authorization was decided once at
+ * connect, so they call this on each push and close when it turns false.
+ * Staleness is bounded by the user cache TTL, or none after invalidateUserCache.
+ * Fails closed: a lookup error counts as revoked, and the client reconnects
+ * through full authentication.
+ */
+export async function isActiveAdmin(userId: number): Promise<boolean> {
+  try {
+    const user = await getCachedUser(await DatabaseService.getInstance(), String(userId));
+    return user?.is_active === 1 && user.role === 'admin';
+  } catch (err) {
+    logger.warn('Stream authorization re-check failed; closing stream', {
+      operation: 'isActiveAdmin',
+      userId,
+      error: (err as Error).message,
+    });
+    return false;
+  }
+}
+
 // --- Middleware: requireRole ---
 
 /**

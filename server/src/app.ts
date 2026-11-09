@@ -211,8 +211,9 @@ const swaggerSpec = swaggerJsdoc(swaggerOptions);
 export function createApp(): express.Application {
   const app = express();
 
-  // Trust reverse proxy so express-rate-limit reads the real client IP
-  // from X-Forwarded-For. Configurable via TRUST_PROXY env var (default: 1).
+  // Number of reverse proxies in front of the API whose X-Forwarded-For is
+  // trusted for req.ip (rate-limit keys, audit IPs). TRUST_PROXY, default off:
+  // a client that reaches the API directly must not choose its own IP.
   app.set('trust proxy', config.server.trustProxy);
 
   // --- Global Middleware ---

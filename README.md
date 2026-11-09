@@ -125,6 +125,7 @@ Settings go in `.env` next to `compose.yaml`:
 | `HTTP_PORT` | `8080` | Host port for the app |
 | `SITE_ADDRESS` | `:80` | Set to a domain (e.g. `shelf.example.com`) to get automatic HTTPS. Point its DNS at this host, set `HTTP_PORT=80`, `HTTPS_PORT=443` and `COOKIE_SECURE=true` |
 | `WORKER_REPLICAS` | `1` | Number of worker containers |
+| `TRUST_PROXY` | `1` | Proxy hops in front of the API whose `X-Forwarded-For` is trusted for the client IP. Caddy is one; add one for each load balancer in front of it |
 
 Data lives in Docker volumes (`pgdata`, `redisdata`, `appdata` for sites, brands and caches, `storage` for Excel files), so it survives `docker compose down` and upgrades. `docker compose down -v` deletes it.
 
@@ -334,7 +335,7 @@ Username and password is the default sign-in, and it stays available for everyon
 **Single sign-on (optional).** An admin connects any OpenID Connect provider (Microsoft Entra ID, Okta, Google Workspace, Keycloak, …) under **Config → Single sign-on**: issuer URL, client ID and secret, and the email domains allowed in. Register the redirect URI the panel shows with the provider. The sign-in page then offers "Sign in with <label>" next to the password form. On first SSO sign-in:
 
 - an account already connected to that identity signs in;
-- otherwise a non-admin account with the same email on an allowed domain is connected;
+- otherwise a non-admin account with the same email on an allowed domain is connected, but only when the provider marks that email verified (`email_verified: true` in the ID token);
 - otherwise a new `user` account is created for an allowed domain;
 - an admin account is never connected by email. Admins sign in with their password and use **Connect single sign-on** on their account page.
 
@@ -395,7 +396,7 @@ All keyboard- and screen-reader-accessible out of the box. Extend these rather t
 
 ## Deployment
 
-Use Docker Compose (see [Run with Docker](#run-with-docker)). To run a production build by hand: `npm run build:server && npm run build:client`, then start the API and workers with PM2 (`pm2 start server/ecosystem.config.js`) and the frontend with `npm start --workspace=client`.
+Use Docker Compose (see [Run with Docker](#run-with-docker)). To run a production build by hand: `npm run build:server && npm run build:client`, then start the API and workers with PM2 (`pm2 start server/ecosystem.config.js`) and the frontend with `npm start --workspace=client`. The API ignores `X-Forwarded-For` unless `TRUST_PROXY` is set. If a reverse proxy sits in front of it and clients cannot reach port 3001 directly, set `TRUST_PROXY=1` (one per proxy hop) so rate limits and audit logs see the real client IP.
 
 ## API Documentation
 

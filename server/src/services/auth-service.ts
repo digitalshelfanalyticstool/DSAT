@@ -4,8 +4,8 @@
  * Implements:
  *   - JWT access tokens (15-minute expiration)
  *   - Refresh tokens (7-day expiration, stored as bcrypt hashes in DB)
- *   - IP-based rate limiting (5 attempts per 15 minutes)
- *   - Account lockout (5 failed attempts → 30-minute lock)
+ *   - Login throttling: 5 attempts per account per client IP per 15 minutes,
+ *     and a 15-minute account lock after 20 failed attempts from any source
  *   - Token cleanup for expired refresh tokens
  */
 
@@ -15,11 +15,6 @@ import crypto from 'node:crypto';
 import type { DatabaseService } from './database';
 import { createLogger } from '../utils/logger';
 import { config } from '../config';
-import {
-  RateLimitStoreError,
-  recordAttempt as recordRateLimitAttempt,
-  checkRateLimit as checkRateLimitStore,
-} from './rate-limit-store';
 export type { UserRow, UserResponse } from '../types/auth';
 import type { UserRow, UserResponse } from '../types/auth';
 import { ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS } from './session-lifetimes';
@@ -89,11 +84,11 @@ function getDummyHash(): Promise<string> {
   dummyHashPromise ??= bcrypt.hash('timing-attack-mitigation-dummy', saltRounds());
   return dummyHashPromise;
 }
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX_ATTEMPTS = 5;
-const ACCOUNT_LOCKOUT_ATTEMPTS = 5;
-// Matches the rate-limit window, so a legitimate user who mistyped a few times
-// waits no longer than the IP limiter would make them.
+/** Password evaluations per (account, client IP) per window. */
+const LOGIN_ATTEMPTS_PER_SOURCE = 5;
+/** Password evaluations per account, across all sources, before it locks. */
+const ACCOUNT_LOCKOUT_ATTEMPTS = 20;
+// Window for the per-source count and length of an account lock.
 const ACCOUNT_LOCKOUT_DURATION_S = 15 * 60; // 15 minutes in seconds
 
 // --- Configuration ---
@@ -357,105 +352,87 @@ export async function validateRefreshToken(db: DatabaseService, token: string): 
   return { user, tokenId: matchedTokenId };
 }
 
-// --- Rate Limiting ---
+// --- Account Lockout ---
 
 /**
- * Check IP-based rate limit using DB-backed store. Throws 429 if exceeded.
- * Sliding window: 5 attempts per 15 minutes per IP.
+ * Reserve one password evaluation for `username` from `ipAddress`, BEFORE the
+ * password is compared. Returns the user row when the caller may compare, or a
+ * Retry-After (seconds) when it must answer 423 without comparing.
+ *
+ * Two limits, both counted in the same transaction under a row lock on the
+ * user (SELECT ... FOR UPDATE), so concurrent requests cannot all pass a stale
+ * check and each get a compare:
+ *   - per source: LOGIN_ATTEMPTS_PER_SOURCE per (username, client IP) per
+ *     window, kept in rate_limit_attempts. A client spamming wrong passwords
+ *     locks only itself out, not the owner signing in from elsewhere.
+ *   - per account: ACCOUNT_LOCKOUT_ATTEMPTS on users.failed_login_attempts,
+ *     which sets locked_until and blocks every source. This caps guessing
+ *     spread across many IPs; locking an account this way takes several IPs.
+ *
+ * The attempt is counted whether or not the password turns out to be right;
+ * a successful login clears both counters (resetFailedLogins). Unknown and
+ * disabled usernames are not counted: there is nothing to protect.
  */
-export async function checkRateLimit(db: DatabaseService, ipAddress: string): Promise<void> {
-  try {
-    await checkRateLimitStore(db, ipAddress, 'ip', RATE_LIMIT_MAX_ATTEMPTS, RATE_LIMIT_WINDOW_MS);
-  } catch (err) {
-    if (err instanceof RateLimitStoreError) {
-      const authErr = new AuthError('Too many login attempts. Please try again later.', 429);
-      throw authErr;
+async function reserveLoginAttempt(
+  db: DatabaseService,
+  username: string,
+  ipAddress: string,
+): Promise<{ user?: UserRow; retryAfter?: number }> {
+  return db.transaction(async (tx) => {
+    const now = Math.floor(Date.now() / 1000);
+    const user = await tx.get<UserRow & { failed_login_attempts: number }>(
+      'SELECT * FROM users WHERE LOWER(username) = LOWER($1) FOR UPDATE', username,
+    );
+    if (!user || user.is_active !== 1) return { user };
+
+    // Account-wide lock: failed-login threshold or an admin lock.
+    if (user.locked_until !== null && user.locked_until > now) {
+      return { retryAfter: user.locked_until - now };
     }
-    throw err;
-  }
+
+    const sourceKey = loginSourceKey(user.id, ipAddress);
+    const recent = await tx.get<{ count: number; oldest: number | null }>(
+      `SELECT COUNT(*) AS count, MIN(attempted_at) AS oldest FROM rate_limit_attempts
+        WHERE key = $1 AND type = 'username' AND attempted_at > $2`,
+      sourceKey, now - ACCOUNT_LOCKOUT_DURATION_S,
+    );
+    if (recent && Number(recent.count) >= LOGIN_ATTEMPTS_PER_SOURCE) {
+      return { retryAfter: Math.max(1, Number(recent.oldest) + ACCOUNT_LOCKOUT_DURATION_S - now) };
+    }
+    await tx.run(
+      'INSERT INTO rate_limit_attempts (key, type, attempted_at) VALUES ($1, $2, $3)',
+      sourceKey, 'username', now,
+    );
+
+    // An expired lock starts a fresh count.
+    const attempts = (user.locked_until === null ? user.failed_login_attempts : 0) + 1;
+    const lockedUntil = attempts >= ACCOUNT_LOCKOUT_ATTEMPTS ? now + ACCOUNT_LOCKOUT_DURATION_S : null;
+    await tx.run(
+      'UPDATE users SET failed_login_attempts = $1, locked_until = $2, updated_at = $3 WHERE id = $4',
+      attempts, lockedUntil, now, user.id,
+    );
+    if (lockedUntil !== null) {
+      logger.warn('Account locked due to repeated failed login attempts', {
+        operation: 'reserveLoginAttempt',
+        username,
+        ipAddress,
+        attempts,
+        lockedUntil: new Date(lockedUntil * 1000).toISOString(),
+      });
+    }
+    return { user };
+  });
+}
+
+function loginSourceKey(userId: number, ipAddress: string): string {
+  return `login:${userId}:${ipAddress}`;
 }
 
 /**
- * Record a failed login attempt for account lockout tracking.
- *
- * The source of truth is the `users.failed_login_attempts` column, not the
- * rate_limit_attempts table: keeping the counter on the user row gives an
- * atomic increment/check/reset, and keeps lockout separate from IP limiting.
- *
- * After ACCOUNT_LOCKOUT_ATTEMPTS (5) consecutive failures, sets
- * `locked_until = NOW() + 15 min`. Lockout is enforced by the
- * `locked_until > NOW()` check in checkAccountLockout — `is_active` is
- * NOT toggled (admin disable and lockout are distinct states).
- *
- * The IP-level rate-limit table remains in place via `recordAttempt('ip')`
- * — that's a separate concern from per-account lockout.
+ * Clear failed-login state after a successful authentication: the account
+ * counter, any expired lock, and this source's attempts.
  */
-export async function recordFailedLogin(db: DatabaseService, username: string, ipAddress: string): Promise<void> {
-  // Maintain the IP-level rate-limit table so the existing checkRateLimit
-  // path keeps working. This entry is INDEPENDENT of the lockout counter.
-  await recordRateLimitAttempt(db, ipAddress, 'ip').catch(() => { /* non-fatal */ });
-
-  const now = Math.floor(Date.now() / 1000);
-  const lockoutThresholdSecs = now + ACCOUNT_LOCKOUT_DURATION_S;
-
-  // Atomically increment the per-user counter. If the user does not exist
-  // (changes === 0), we no-op silently — we don't want to leak which
-  // usernames are real via differential timing.
-  const result = await db.run(
-    `UPDATE users
-       SET failed_login_attempts = failed_login_attempts + 1,
-           locked_until = CASE
-             WHEN failed_login_attempts + 1 >= $1 THEN $2
-             ELSE locked_until
-           END,
-           updated_at = $3
-     WHERE LOWER(username) = LOWER($4)`,
-    ACCOUNT_LOCKOUT_ATTEMPTS, lockoutThresholdSecs, now, username,
-  );
-
-  if (result.changes === 0) {
-    logger.warn('Failed login attempt for non-existent username', {
-      operation: 'recordFailedLogin',
-      ipAddress,
-    });
-    return;
-  }
-
-  // Read back the count so we can log the lockout transition.
-  const updated = await db.get<{ failed_login_attempts: number; locked_until: number | null }>(
-    `SELECT failed_login_attempts, locked_until FROM users
-      WHERE LOWER(username) = LOWER($1) LIMIT 1`,
-    username,
-  );
-
-  if (
-    updated &&
-    updated.failed_login_attempts >= ACCOUNT_LOCKOUT_ATTEMPTS &&
-    updated.locked_until !== null
-  ) {
-    logger.warn('Account locked due to repeated failed login attempts', {
-      operation: 'recordFailedLogin',
-      username,
-      ipAddress,
-      attempts: updated.failed_login_attempts,
-      lockedUntil: new Date(updated.locked_until * 1000).toISOString(),
-    });
-  } else {
-    logger.warn('Failed login attempt', {
-      operation: 'recordFailedLogin',
-      username,
-      ipAddress,
-      attempts: updated?.failed_login_attempts ?? 0,
-    });
-  }
-}
-
-/**
- * Reset failed-login state for a successful authentication.
- * Called from login() after a successful bcrypt.compare.
- * Sets failed_login_attempts = 0 and clears locked_until.
- */
-async function resetFailedLogins(db: DatabaseService, userId: number): Promise<void> {
+async function resetFailedLogins(db: DatabaseService, userId: number, ipAddress: string): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   await db.run(
     `UPDATE users
@@ -463,55 +440,10 @@ async function resetFailedLogins(db: DatabaseService, userId: number): Promise<v
      WHERE id = $2`,
     now, userId,
   );
-}
-
-/**
- * Result of a lockout check. When `locked` is true, `retryAfterSeconds` is
- * the number of seconds the caller should send in a Retry-After header.
- * The login flow turns it into 423 Locked + Retry-After; see login() for why
- * that trade-off against enumeration is deliberate.
- */
-export interface LockoutStatus {
-  locked: boolean;
-  retryAfterSeconds: number;
-}
-
-/**
- * Check if an account is currently locked out.
- * Lockout is signaled solely by `locked_until > NOW()`. The
- * `is_active` flag is reserved for explicit admin disable. If
- * `locked_until <= NOW()`, the lock has expired — the next failed-login
- * UPDATE will refresh it; we don't need to clear it here (treats EXPIRED
- * lock the same as no lock for the lockout-check path).
- */
-export async function checkAccountLockout(db: DatabaseService, username: string): Promise<LockoutStatus> {
-  const user = await db.get<UserRow>(
-    'SELECT id, locked_until FROM users WHERE LOWER(username) = LOWER($1) LIMIT 1', username,
-  );
-  if (!user || user.locked_until === null || user.locked_until === undefined) {
-    return { locked: false, retryAfterSeconds: 0 };
-  }
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  if (nowSeconds < user.locked_until) {
-    return {
-      locked: true,
-      retryAfterSeconds: user.locked_until - nowSeconds,
-    };
-  }
-
-  // Lockout window passed — clear it opportunistically so the column doesn't
-  // accumulate stale rows. Only clear if STILL locked at this moment to avoid
-  // racing with a concurrent recordFailedLogin.
   await db.run(
-    `UPDATE users SET locked_until = NULL, failed_login_attempts = 0, updated_at = $1
-       WHERE LOWER(username) = LOWER($2)
-         AND locked_until IS NOT NULL
-         AND locked_until <= $3`,
-    nowSeconds, username, nowSeconds,
+    "DELETE FROM rate_limit_attempts WHERE key = $1 AND type = 'username'",
+    loginSourceKey(userId, ipAddress),
   );
-
-  return { locked: false, retryAfterSeconds: 0 };
 }
 
 /**
@@ -553,8 +485,8 @@ export async function reactivateExpiredLockouts(db: DatabaseService): Promise<nu
  * `retryAfter` value (seconds until the lockout expires). This is a
  * deliberate trade-off — it makes lockout state observable to an attacker
  * (mild username enumeration) in exchange for honest signaling to a
- * legitimate user. The IP-level rate limiter (5/15min) and the per-account
- * counter (5/15min lockout) together still throttle a brute-force attempt.
+ * legitimate user. See reserveLoginAttempt for the per-source and
+ * per-account limits.
  */
 export async function login(db: DatabaseService, input: LoginInput): Promise<AuthResult> {
   const { password, ipAddress } = input;
@@ -565,33 +497,26 @@ export async function login(db: DatabaseService, input: LoginInput): Promise<Aut
 
   const dummyHash = await getDummyHash();
 
-  // The lockout status carries a retry-after so the route can send 423 + Retry-After.
-  const lockStatus = await checkAccountLockout(db, username);
-  if (lockStatus.locked) {
+  // Reserve the attempt before comparing, so the lockout holds under concurrency.
+  const { user, retryAfter } = await reserveLoginAttempt(db, username, ipAddress);
+  if (retryAfter !== undefined) {
     // Equalize timing with the bcrypt-compare path so the lockout response
     // doesn't reveal "this username exists AND was recently brute-forced"
     // measurably faster than other paths.
     await bcrypt.compare(password, dummyHash);
     const err = new AuthError('Account is temporarily locked. Try again later.', 423);
-    err.retryAfter = lockStatus.retryAfterSeconds;
+    err.retryAfter = retryAfter;
     throw err;
   }
 
-  // Look up user, case-insensitively on BOTH sides. Write paths normalize to
-  // lowercase today (createUser/updateUser/bulk import all .trim().toLowerCase()),
-  // but rows predating that normalization are still stored mixed-case — against
-  // those, a bare `username = LOWER($1)` never matches and the account is
-  // permanently unreachable. Do not "optimize" this back to an unwrapped column:
-  // migration 50 backs this predicate with idx_users_username_lower, a unique
-  // functional index on LOWER(username), so it stays SARGable and case-insensitive
-  // uniqueness is enforced by the database. This also matches the predicate used
-  // by recordFailedLogin() and checkAccountLockout(), so all three agree on
-  // what "the same user" means.
-  const user = await db.get<UserRow>('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', username);
+  // The lookup in reserveLoginAttempt is case-insensitive on BOTH sides. Write
+  // paths normalize to lowercase today, but rows predating that normalization
+  // are still stored mixed-case. Migration 50 backs the LOWER(username)
+  // predicate with idx_users_username_lower, a unique functional index, so it
+  // stays SARGable and case-insensitive uniqueness is enforced by the database.
   if (!user) {
     // Async dummy bcrypt compare to prevent timing attacks (equalizes response time)
     await bcrypt.compare(password, dummyHash);
-    await recordFailedLogin(db, username, ipAddress);
     throw new AuthError(GENERIC_AUTH_ERROR, 401);
   }
 
@@ -601,17 +526,15 @@ export async function login(db: DatabaseService, input: LoginInput): Promise<Aut
     throw new AuthError(GENERIC_AUTH_ERROR, 401);
   }
 
-  // Verify password — async to avoid blocking the event loop (~250ms per call)
+  // Verify password — async to avoid blocking the event loop (~250ms per call).
+  // The attempt is already counted; a failure needs no further write.
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
-    await recordFailedLogin(db, username, ipAddress);
+    logger.warn('Failed login attempt', { operation: 'login', username, ipAddress });
     throw new AuthError(GENERIC_AUTH_ERROR, 401);
   }
 
-  // Successful auth resets the failed-login counter and clears
-  // any expired-but-not-yet-cleaned-up lockout. Use the user.id from the
-  // freshly loaded row; we don't need to round-trip on the username again.
-  await resetFailedLogins(db, user.id);
+  await resetFailedLogins(db, user.id, ipAddress);
 
   // Opportunistic re-hash to current cost factor when the stored
   // hash uses an older cost. We do this AFTER verifying the password (so we
