@@ -83,9 +83,16 @@ router.get(
 
     // Subscribe to Redis Pub/Sub monitor progress channel
     let subscribed = true;
+    // Events that arrive while an authorization re-check is in flight wait for it.
+    let rechecking = false;
+    const held: MonitorProgressEvent[] = [];
 
     const progressHandler = (event: MonitorProgressEvent): void => {
       if (!subscribed) return;
+      if (rechecking) {
+        held.push(event);
+        return;
+      }
       try {
         sendSSEEvent(res, 'progress', event);
 
@@ -107,17 +114,19 @@ router.get(
     // Close the stream if the subscriber stops being an active admin.
     const userId = req.user!.id;
     const authTimer = setInterval(() => {
-      isActiveAdmin(userId).then((ok) => {
-        if (ok || !subscribed) return;
-        sendSSEEvent(res, 'unauthorized', { message: 'Access revoked' });
-        cleanup();
-        res.end();
-      }).catch((err: unknown) => {
-        logger.warn('Stream authorization re-check failed', {
-          operation: 'monitorStream',
-          runId,
-          error: (err as Error).message,
-        });
+      if (rechecking) return;
+      rechecking = true;
+      void isActiveAdmin(userId).then((ok) => {
+        rechecking = false;
+        if (!subscribed) return;
+        if (!ok) {
+          held.length = 0;
+          sendSSEEvent(res, 'unauthorized', { message: 'Access revoked' });
+          cleanup();
+          res.end();
+          return;
+        }
+        for (const event of held.splice(0)) progressHandler(event);
       });
     }, ADMIN_RECHECK_MS);
 
