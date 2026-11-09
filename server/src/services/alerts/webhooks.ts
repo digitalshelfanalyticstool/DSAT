@@ -30,8 +30,20 @@ export interface WebhookPayload { event: 'alerts'; alerts: WebhookAlert[]; text:
 
 const money = (v: unknown) => (typeof v === 'number' ? `$${v.toFixed(2)}` : null);
 
+/**
+ * Scraped values (titles, URLs) are retailer-controlled. Escape them for Slack
+ * mrkdwn (`&`, `<`, `>`: no `<!channel>` or `<url|label>` links), defuse plain
+ * `@channel`/`@here`/`@everyone`, and keep each alert on one line.
+ */
+function chatText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    .replace(/@(?=(?:channel|here|everyone)\b)/gi, '@\u200b');
+}
+
 function summaryLine(a: WebhookAlert): string {
-  const who = `${a.product.title || a.product.style_id} (${a.retailer}, ${a.brand})`;
+  const who = `${chatText(a.product.title || a.product.style_id)} (${chatText(a.retailer)}, ${chatText(a.brand)})`;
   const prices = [money(a.details.old_price), money(a.details.new_price)].filter(Boolean).join(' → ');
   const parts: string[] = (() => {
     switch (a.kind) {
@@ -41,10 +53,10 @@ function summaryLine(a: WebhookAlert): string {
       case 'broken_image':
         return a.details.reason === 'missing'
           ? [`Missing image: ${who}`]
-          : [`Broken image: ${who}`, String(a.details.image_url ?? '')];
+          : [`Broken image: ${who}`, chatText(a.details.image_url)];
     }
   })();
-  return [...parts, a.product.url].filter(Boolean).join(' ');
+  return [...parts, chatText(a.product.url)].filter(Boolean).join(' ');
 }
 
 export function buildPayload(alerts: WebhookAlert[], now = new Date()): WebhookPayload {
