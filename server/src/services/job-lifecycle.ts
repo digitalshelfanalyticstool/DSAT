@@ -12,13 +12,14 @@
  * attempt with its own BullMQ id (scrapeAttemptId), because BullMQ silently
  * drops an add whose id it still retains.
  */
-import { getJobStore, type JobRecord, type JobState, type JobFieldUpdate } from './job-store';
+import { getJobStore, type JobStore, type JobRecord, type JobState, type JobFieldUpdate } from './job-store';
 import { getQueueService } from './queue-service';
 import { getProgressBus } from './progress-bus';
 import { getSites, getBrands } from './config-manager';
 import { invalidateJobStatsCache } from './redis-cache';
 import { scrapeAttemptId } from './queues';
 import { createLogger } from '../utils/logger';
+import { config } from '../config';
 import type { FailureCategory } from './failure-classifier';
 
 const logger = createLogger('job-lifecycle');
@@ -62,6 +63,24 @@ async function resolveTarget(site: string, brand: string): Promise<{ site: strin
   return { site: siteConfig.name, brand: brandConfig.name };
 }
 
+/**
+ * Run `write` (which makes one more of the user's jobs active) only while the
+ * user is under config.jobs.maxActivePerUser, counting and writing under a
+ * per-user lock so concurrent requests can't overshoot.
+ */
+async function underActiveLimit<T>(userId: string, write: (store: JobStore) => Promise<T>): Promise<T> {
+  const limit = config.jobs.maxActivePerUser;
+  return (await getJobStore()).withUserLock(userId, async (store) => {
+    if (await store.countForUser(userId, ACTIVE_STATES) >= limit) {
+      throw new JobLifecycleError(
+        `You already have ${limit} queued or running jobs. Wait for one to finish or cancel one, then try again.`,
+        429,
+      );
+    }
+    return write(store);
+  });
+}
+
 /** Check a site/brand pair without creating anything (schedule creation uses this). */
 export async function validateJobTarget(site: string, brand: string): Promise<void> {
   await resolveTarget(site, brand);
@@ -89,10 +108,11 @@ export async function createJob(input: {
   scheduleId?: number;
   /** The failed/cancelled job this one restarts from scratch. */
   restartOf?: JobRecord;
+  /** Skip the per-user active-job limit (scheduler and admin backfill only). */
+  bypassActiveLimit?: boolean;
 }): Promise<JobRecord> {
   const target = await resolveTarget(input.site, input.brand);
-  const jobStore = await getJobStore();
-  const job = await jobStore.create({
+  const insert = (store: JobStore) => store.create({
     user_id: input.userId,
     site: target.site,
     brand: target.brand,
@@ -100,6 +120,9 @@ export async function createJob(input: {
     restart_count: input.restartOf ? input.restartOf.restart_count + 1 : 0,
     restart_parent_id: input.restartOf?.job_id ?? null,
   });
+  const job = input.bypassActiveLimit
+    ? await insert(await getJobStore())
+    : await underActiveLimit(input.userId, insert);
   try {
     await enqueueAttempt(job, { scheduleId: input.scheduleId });
   } catch (err) {
@@ -116,13 +139,12 @@ export async function createJob(input: {
  * attempt. The worker reads the checkpoint itself (it shares the data dir).
  */
 export async function continueJob(job: JobRecord): Promise<JobRecord> {
-  const jobStore = await getJobStore();
-  const queued = changed(await jobStore.transition(job.job_id, ['failed', 'cancelled'], 'queued', {
+  const queued = changed(await underActiveLimit(job.user_id, (store) => store.transition(job.job_id, ['failed', 'cancelled'], 'queued', {
     error_message: null,
     failure_category: null,
     completed_at: null,
     restart_count: job.restart_count + 1,
-  }));
+  })));
   if (!queued) {
     throw new JobLifecycleError(`Job ${job.job_id} changed state; reload and try again`, 409);
   }

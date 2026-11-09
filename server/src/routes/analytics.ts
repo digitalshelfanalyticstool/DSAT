@@ -15,14 +15,17 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import Bottleneck from 'bottleneck';
+import { config } from '../config';
 import { DatabaseService } from '../services/database';
 import { authMiddleware } from '../middleware/auth';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { validate, type ValidatedRequest } from '../middleware/validate';
 import { errorResponse } from '../utils/error-response';
-import { asyncHandler } from '../utils/async-handler';
+import { asyncHandler, httpError } from '../utils/async-handler';
 import { createLogger } from '../utils/logger';
 import { getCachedOrFetch } from '../services/redis-cache';
+import { getSites, getBrands } from '../services/config-manager';
 import { isOwnerOrAdmin } from '../services/user-records';
 import { diffRunPairs, sumRunDiffs, snapshotWindow, type RunRef } from '../services/run-diff';
 
@@ -368,12 +371,34 @@ interface TopProductRow {
 
 // --- Overview validation ---
 
-const overviewQuerySchema = z.object({
-  from: z.coerce.date(),
-  to: z.coerce.date(),
-  site: z.string().optional(),
-  brand: z.string().optional(),
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Truncate to the UTC day: the queries are day-grained anyway (`to` is read
+// as `$2::date`), and a millisecond-precise value would give every request
+// its own cache key.
+const utcDay = z.coerce.date().transform((d) => new Date(Math.floor(d.getTime() / DAY_MS) * DAY_MS));
+
+const overviewQuerySchema = z
+  .object({
+    from: utcDay,
+    to: utcDay,
+    site: z.string().optional(),
+    brand: z.string().optional(),
+  })
+  .refine((q) => q.from <= q.to, { message: 'from must not be after to', path: ['from'] })
+  .refine(
+    (q) => q.to.getTime() - q.from.getTime() <= config.analytics.overviewMaxRangeDays * DAY_MS,
+    { message: `range is too wide (max ${config.analytics.overviewMaxRangeDays} days)`, path: ['from'] },
+  );
+
+// Bounds how many overview aggregations hit the shared pool at once, however
+// many distinct cache keys the requests use. Misses past the queue cap are
+// dropped (OVERFLOW) and answered 503 rather than piling up.
+const overviewLimiter = new Bottleneck({
+  maxConcurrent: config.analytics.overviewConcurrency,
+  highWater: config.analytics.overviewQueueMax,
+  strategy: Bottleneck.strategy.OVERFLOW,
 });
+const OVERVIEW_BUSY_RETRY_AFTER_SECS = 5;
 const overviewSchemas = { query: overviewQuerySchema };
 
 /**
@@ -403,6 +428,17 @@ router.get(
     const { from: fromDate, to: toDate, site, brand } = req.query;
 
     const userId = req.user!.id;
+
+    // Only configured names (enabled or not) reach the cache key, so the key
+    // space stays bounded; anything else could only match no rows.
+    if (site !== undefined && !(await getSites()).some((s) => s.name === site)) {
+      res.status(400).json(errorResponse(`Unknown site "${site.slice(0, 100)}"`, 'validation_error'));
+      return;
+    }
+    if (brand !== undefined && !(await getBrands()).some((b) => b.name === brand)) {
+      res.status(400).json(errorResponse(`Unknown brand "${brand.slice(0, 100)}"`, 'validation_error'));
+      return;
+    }
 
     // Cache the ~9-query aggregation. Key is derived from the exact
     // filter params the handler reads ({from,to,site,brand}); a cache hit
@@ -704,6 +740,12 @@ router.get(
         colors: row.colors ? row.colors.split(', ').filter(Boolean) : [],
       })),
     };
+    }, (fn) => overviewLimiter.schedule(fn)).catch((err: unknown) => {
+      if (!(err instanceof Bottleneck.BottleneckError)) throw err;
+      res.set('Retry-After', String(OVERVIEW_BUSY_RETRY_AFTER_SECS));
+      throw Object.assign(httpError(err, 503), {
+        routeFailure: { operation: 'getAnalyticsOverview', message: 'Analytics is busy. Try again in a few seconds.' },
+      });
     });
 
     logger.info('Overview analytics fetched', {

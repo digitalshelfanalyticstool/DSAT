@@ -447,6 +447,17 @@ export const config = {
   },
 
   jobs: {
+    /**
+     * Queued + running scrape jobs one user may have before creating,
+     * restarting or continuing another is refused with 429. Scheduled runs
+     * and admin backfill are exempt but still count. Default 10: a typical
+     * multi-brand batch fits, and one account can't take most of the
+     * default 26 worker slots (WORKER_CONCURRENCY 13 x EXPECTED_WORKERS 2).
+     */
+    get maxActivePerUser(): number {
+      const raw = Number.parseInt(process.env.MAX_ACTIVE_JOBS_PER_USER || '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 10;
+    },
     get jobTimeoutMs(): number {
       return Number.parseInt(process.env.JOB_TIMEOUT_MS || String(60 * 60 * 1000), 10);
     },
@@ -478,6 +489,31 @@ export const config = {
     /** Delivery attempts per webhook (first try included), with exponential backoff. */
     get webhookAttempts(): number {
       return Number.parseInt(process.env.WEBHOOK_DELIVERY_ATTEMPTS || '3', 10);
+    },
+  },
+
+  analytics: {
+    /** Widest from..to span, in days, that GET /analytics/overview accepts. */
+    get overviewMaxRangeDays(): number {
+      const raw = Number.parseInt(process.env.ANALYTICS_MAX_RANGE_DAYS || '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 366;
+    },
+    /**
+     * Overview aggregations computed at once per API process. Each runs 9
+     * queries in parallel on the API's pool (DATABASE_POOL_SIZE, default 10),
+     * so 1 leaves connections for every other request.
+     */
+    get overviewConcurrency(): number {
+      const raw = Number.parseInt(process.env.ANALYTICS_OVERVIEW_CONCURRENCY || '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 1;
+    },
+    /**
+     * Uncached overview requests that may wait for a slot per API process.
+     * Beyond it a request gets 503 + Retry-After instead of queueing.
+     */
+    get overviewQueueMax(): number {
+      const raw = Number.parseInt(process.env.ANALYTICS_OVERVIEW_QUEUE_MAX || '', 10);
+      return Number.isFinite(raw) && raw >= 0 ? raw : 10;
     },
   },
 

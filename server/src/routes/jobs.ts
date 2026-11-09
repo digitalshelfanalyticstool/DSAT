@@ -370,7 +370,8 @@ router.post(
     const { site, brand } = req.body;
 
     // A rule violation (unconfigured site, brand not enabled for the
-    // retailer) is a JobLifecycleError carrying its 400; anything else is a 500.
+    // retailer) is a JobLifecycleError carrying its 400, or 429 at the
+    // per-user active-job limit; anything else is a 500.
     const job = await createJob({ site, brand, userId: String(req.user!.id) });
 
     logger.info('Job created via API', {

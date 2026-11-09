@@ -159,9 +159,12 @@ class Http {
 
     let response = await this.send(url, options);
 
-    if (response.status === 429) {
-      const resetHeader = response.headers.get('RateLimit-Reset');
-      const retryAfter = resetHeader ? Number.parseInt(resetHeader, 10) : 60;
+    // Only a rate limiter's 429 (it sends RateLimit-Reset) starts the global
+    // cooldown. Any other 429 is a rule such as the active-job limit: it falls
+    // through so request() throws with the server's message.
+    const resetHeader = response.status === 429 ? response.headers.get('RateLimit-Reset') : null;
+    if (resetHeader) {
+      const retryAfter = Number.parseInt(resetHeader, 10) || 60;
       this.rateLimitedUntil = Date.now() + retryAfter * 1000;
       throw new Error(`Too many requests. Please wait ${retryAfter} seconds before trying again.`);
     }

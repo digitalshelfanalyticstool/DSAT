@@ -81,15 +81,51 @@ async function waitForCache<T>(key: string): Promise<T | null> {
  * @param key     - Redis key (prefix with `cache:` by convention)
  * @param ttlSecs - Time-to-live in seconds
  * @param fetcher - Async function that produces the value on cache miss
+ * @param gate    - Optional admission control wrapped around the lock and fetch
  */
-export async function getCachedOrFetch<T>(
+export function getCachedOrFetch<T>(
+  key: string,
+  ttlSecs: number,
+  fetcher: () => Promise<T>,
+  gate?: Gate,
+): Promise<T> {
+  // Same-process callers for the same key share one computation. The Redis
+  // lock alone stops covering them once a fetcher outruns LOCK_MAX_WAIT_MS
+  // or Redis is down; this map is empty whenever nothing is in flight.
+  const pending = inFlight.get(key);
+  if (pending) return pending as Promise<T>;
+  const p = readOrFetch(key, ttlSecs, fetcher, gate).finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
+
+const inFlight = new Map<string, Promise<unknown>>();
+
+/** Admission control for a cache miss: runs `fn` once a slot is free, or rejects. */
+export type Gate = <R>(fn: () => Promise<R>) => Promise<R>;
+
+async function readOrFetch<T>(
+  key: string,
+  ttlSecs: number,
+  fetcher: () => Promise<T>,
+  gate?: Gate,
+): Promise<T> {
+  const cached = await tryReadCache(key);
+  if (cached) return JSON.parse(cached) as T;
+  if (!gate) return lockAndFetch(key, ttlSecs, fetcher);
+  // The lock is taken only once the gate admits us, so a queued miss never
+  // holds it. Re-read first: another process may have filled the key meanwhile.
+  return gate(async () => {
+    const filled = await tryReadCache(key);
+    return filled ? (JSON.parse(filled) as T) : lockAndFetch(key, ttlSecs, fetcher);
+  });
+}
+
+async function lockAndFetch<T>(
   key: string,
   ttlSecs: number,
   fetcher: () => Promise<T>,
 ): Promise<T> {
-  const cached = await tryReadCache(key);
-  if (cached) return JSON.parse(cached) as T;
-
   // Attempt to acquire a stampede lock
   const lockKey = `${key}:lock`;
   let lockAcquired = false;
