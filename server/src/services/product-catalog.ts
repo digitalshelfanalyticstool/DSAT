@@ -69,12 +69,31 @@ export interface ProductCatalog extends Stamp {
   entries: CatalogEntry[];
 }
 
+/**
+ * Site and brand names are admin free text. Percent-encode the path
+ * separators so a name stays inside one filename, and leave every other
+ * character alone so existing cache files keep their names. Lowercase
+ * escapes, so a name read back from a filename (listCatalogCaches, then
+ * purge) maps to the same file.
+ */
+function nameComponent(name: string): string {
+  return name.toLowerCase().replaceAll('/', '%2f').replaceAll('\\', '%5c');
+}
+
+/** A file directly inside the catalogs dir; throws if the name escapes it. */
+function catalogFile(site: string, brand: string, suffix: string): string {
+  const dir = path.resolve(catalogsDir());
+  const file = path.resolve(dir, `${nameComponent(site)}_${nameComponent(brand)}${suffix}`);
+  if (path.dirname(file) !== dir) throw new Error(`Catalog path escapes ${dir}: ${site} / ${brand}`);
+  return file;
+}
+
 function getCatalogPath(site: string, brand: string): string {
-  return path.join(config.scraping.dataDir, 'catalogs', `${site.toLowerCase()}_${brand.toLowerCase()}.json`);
+  return catalogFile(site, brand, '.json');
 }
 
 function getVariantCachePath(site: string, brand: string): string {
-  return path.join(config.scraping.dataDir, 'catalogs', `${site.toLowerCase()}_${brand.toLowerCase()}_variants.json`);
+  return catalogFile(site, brand, '_variants.json');
 }
 
 // ─── Cache inventory & purge (admin) ─────────────────────────────────────────
