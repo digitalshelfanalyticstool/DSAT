@@ -15,6 +15,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import Bottleneck from 'bottleneck';
+import { config } from '../config';
 import { DatabaseService } from '../services/database';
 import { authMiddleware } from '../middleware/auth';
 import type { AuthenticatedRequest } from '../middleware/auth';
@@ -368,12 +370,28 @@ interface TopProductRow {
 
 // --- Overview validation ---
 
-const overviewQuerySchema = z.object({
-  from: z.coerce.date(),
-  to: z.coerce.date(),
-  site: z.string().optional(),
-  brand: z.string().optional(),
-});
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Truncate to the UTC day: the queries are day-grained anyway (`to` is read
+// as `$2::date`), and a millisecond-precise value would give every request
+// its own cache key.
+const utcDay = z.coerce.date().transform((d) => new Date(Math.floor(d.getTime() / DAY_MS) * DAY_MS));
+
+const overviewQuerySchema = z
+  .object({
+    from: utcDay,
+    to: utcDay,
+    site: z.string().optional(),
+    brand: z.string().optional(),
+  })
+  .refine((q) => q.from <= q.to, { message: 'from must not be after to', path: ['from'] })
+  .refine(
+    (q) => q.to.getTime() - q.from.getTime() <= config.analytics.overviewMaxRangeDays * DAY_MS,
+    { message: `range is too wide (max ${config.analytics.overviewMaxRangeDays} days)`, path: ['from'] },
+  );
+
+// Bounds how many overview aggregations hit the shared pool at once, however
+// many distinct cache keys the requests use.
+const overviewLimiter = new Bottleneck({ maxConcurrent: config.analytics.overviewConcurrency });
 const overviewSchemas = { query: overviewQuerySchema };
 
 /**
@@ -408,7 +426,7 @@ router.get(
     // filter params the handler reads ({from,to,site,brand}); a cache hit
     // returns the identical `analytics` payload a miss would compute.
     const cacheKey = `cache:analytics:overview:${fromDate.toISOString()}:${toDate.toISOString()}:${site ?? ''}:${brand ?? ''}`;
-    const analytics = await getCachedOrFetch(cacheKey, OVERVIEW_CACHE_TTL_SECS, async () => {
+    const analytics = await getCachedOrFetch(cacheKey, OVERVIEW_CACHE_TTL_SECS, () => overviewLimiter.schedule(async () => {
     const { prevFrom, prevTo } = calcComparisonRange(fromDate, toDate);
 
     const db = await DatabaseService.getInstance();
@@ -704,7 +722,7 @@ router.get(
         colors: row.colors ? row.colors.split(', ').filter(Boolean) : [],
       })),
     };
-    });
+    }));
 
     logger.info('Overview analytics fetched', {
       operation: 'getAnalyticsOverview',

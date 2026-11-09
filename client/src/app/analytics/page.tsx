@@ -57,7 +57,7 @@ export default function AnalyticsPage() {
     {
       auto: authChecked,
       deps: [dateRange, site, brand],
-      onError: (err) => console.error('Failed to load analytics:', err.message),
+      onError: 'toast',
     },
   );
 

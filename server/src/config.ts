@@ -463,6 +463,23 @@ export const config = {
     },
   },
 
+  analytics: {
+    /** Widest from..to span, in days, that GET /analytics/overview accepts. */
+    get overviewMaxRangeDays(): number {
+      const raw = Number.parseInt(process.env.ANALYTICS_MAX_RANGE_DAYS || '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 366;
+    },
+    /**
+     * Overview aggregations computed at once per API process. Each runs 9
+     * queries in parallel on the API's pool (DATABASE_POOL_SIZE, default 10),
+     * so 1 leaves connections for every other request.
+     */
+    get overviewConcurrency(): number {
+      const raw = Number.parseInt(process.env.ANALYTICS_OVERVIEW_CONCURRENCY || '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 1;
+    },
+  },
+
   alerts: {
     /** Per-image timeout for broken-image checks. */
     get imageCheckTimeoutMs(): number {

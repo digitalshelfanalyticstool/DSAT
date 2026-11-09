@@ -82,7 +82,24 @@ async function waitForCache<T>(key: string): Promise<T | null> {
  * @param ttlSecs - Time-to-live in seconds
  * @param fetcher - Async function that produces the value on cache miss
  */
-export async function getCachedOrFetch<T>(
+export function getCachedOrFetch<T>(
+  key: string,
+  ttlSecs: number,
+  fetcher: () => Promise<T>,
+): Promise<T> {
+  // Same-process callers for the same key share one computation. The Redis
+  // lock alone stops covering them once a fetcher outruns LOCK_MAX_WAIT_MS
+  // or Redis is down; this map is empty whenever nothing is in flight.
+  const pending = inFlight.get(key);
+  if (pending) return pending as Promise<T>;
+  const p = readOrFetch(key, ttlSecs, fetcher).finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
+
+const inFlight = new Map<string, Promise<unknown>>();
+
+async function readOrFetch<T>(
   key: string,
   ttlSecs: number,
   fetcher: () => Promise<T>,
