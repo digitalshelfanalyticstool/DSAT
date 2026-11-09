@@ -561,6 +561,9 @@ function AdminUsersPageInner() {
                           </Badge>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {u.username.startsWith('erased-') ? (
+                            <span className="text-ink-muted">Erased</span>
+                          ) : (
                           <div className="flex gap-1.5">
                             <Button size="sm" variant="outline" onClick={() => openEdit(u)}>Edit</Button>
                             <Button size="sm" variant="outline" onClick={() => openResetPw(u)}>Reset PW</Button>
@@ -579,12 +582,11 @@ function AdminUsersPageInner() {
                                 {!isLocked(u) && (
                                   <Button size="sm" variant="secondary" onClick={() => handleReactivate(u)}>Reactivate</Button>
                                 )}
-                                {!u.username.startsWith('erased-') && (
-                                  <Button size="sm" variant="danger" onClick={() => openErase(u)}>Erase data</Button>
-                                )}
+                                <Button size="sm" variant="danger" onClick={() => openErase(u)}>Erase data</Button>
                               </>
                             )}
                           </div>
+                          )}
                         </td>
                       </tr>
                     ))}

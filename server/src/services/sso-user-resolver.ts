@@ -5,7 +5,7 @@
  */
 
 import crypto from 'crypto';
-import { hashPassword } from './user-records';
+import { hashPassword, isErasedUsername } from './user-records';
 import { setUserFields } from './user-manager';
 import { createLogger } from '../utils/logger';
 import type { DatabaseService } from './database';
@@ -33,7 +33,9 @@ function domainAllowed(email: string, domains: string[]): boolean {
 }
 
 async function freeUsername(db: DatabaseService, email: string): Promise<string> {
-  const base = email.slice(0, email.lastIndexOf('@')) || 'user';
+  const local = email.slice(0, email.lastIndexOf('@')) || 'user';
+  // erased- names are reserved for erased accounts.
+  const base = isErasedUsername(local) ? `user-${local}` : local;
   const taken = new Set((await db.all<{ u: string }>(
     // LIKE wildcards in a local part only widen this read; the loop below decides.
     'SELECT LOWER(username) AS u FROM users WHERE LOWER(username) LIKE $1',

@@ -10,14 +10,14 @@
 import type { DatabaseService } from './database';
 import type { UserRow } from '../types/auth';
 import type { AuditLogger, AuditRequestContext } from './audit-service';
-import { UserManagerError } from './user-records';
+import { ERASED_PREFIX, UserManagerError, isErasedUsername } from './user-records';
 import { unusablePasswordHash } from './sso-user-resolver';
 import { invalidateUserCache } from './user-cache';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('user-erasure');
 
-export const ERASED_PREFIX = 'erased-';
+export { ERASED_PREFIX };
 
 export async function eraseUserPersonalData(
   db: DatabaseService,
@@ -39,7 +39,7 @@ export async function eraseUserPersonalData(
   if (old.is_active !== 0) {
     throw new UserManagerError('Deactivate the user before erasing', 409);
   }
-  if (old.username.startsWith(ERASED_PREFIX)) {
+  if (isErasedUsername(old.username)) {
     throw new UserManagerError('User is already erased', 409);
   }
 
@@ -54,7 +54,7 @@ export async function eraseUserPersonalData(
       `UPDATE users SET username = $1, email = $2, password_hash = $3,
          sso_issuer = NULL, sso_subject = NULL, last_login = NULL,
          must_change_password = 0, failed_login_attempts = 0, updated_at = $4
-       WHERE id = $5 AND is_active = 0 AND role <> 'admin'`,
+       WHERE id = $5 AND is_active = 0 AND role <> 'admin' AND NOT starts_with(username, 'erased-')`,
       `${ERASED_PREFIX}${userId}`, `${ERASED_PREFIX}${userId}@erased.invalid`, passwordHash, nowSec, userId,
     );
     if (res.changes === 0) {
@@ -67,12 +67,27 @@ export async function eraseUserPersonalData(
       userId, nowSec * 1000,
     );
     await tx.run('UPDATE audit_logs SET ip_address = NULL, user_agent = NULL WHERE user_id = $1', userId);
-    // The CASE keeps the jsonb cast off rows whose details are not JSON.
-    await tx.run(
-      `UPDATE audit_logs SET details = NULL, ip_address = NULL, user_agent = NULL
+    // details is free text written from unauthenticated login attempts, so it is
+    // never cast to jsonb in SQL (one malformed row would fail every erase).
+    // strpos narrows the rows; the exact username match happens here.
+    const names = new Set([old.username.toLowerCase(), old.email.toLowerCase()]);
+    const attempts = await tx.all<{ id: number; details: string | null }>(
+      `SELECT id, details FROM audit_logs
        WHERE action = 'failed_login' AND user_id IS NULL
-         AND (CASE WHEN action = 'failed_login' THEN LOWER(details::jsonb->>'username') END) = ANY($1::text[])`,
-      [old.username.toLowerCase(), old.email.toLowerCase()],
+         AND (strpos(LOWER(details), $1) > 0 OR strpos(LOWER(details), $2) > 0)`,
+      old.username.toLowerCase(), old.email.toLowerCase(),
+    );
+    const ids = attempts.filter((a) => names.has(attemptedUsername(a.details))).map((a) => a.id);
+    if (ids.length > 0) {
+      await tx.run(
+        'UPDATE audit_logs SET details = NULL, ip_address = NULL, user_agent = NULL WHERE id = ANY($1::int[])',
+        ids,
+      );
+    }
+    // create_user rows are filed under the admin but record the new user's username and email.
+    await tx.run(
+      "UPDATE audit_logs SET details = NULL WHERE action = 'create_user' AND resource_type = 'user' AND resource_id = $1",
+      String(userId),
     );
     await tx.run("UPDATE email_log SET to_address = 'erased' WHERE LOWER(to_address) = LOWER($1)", old.email);
   });
@@ -91,4 +106,13 @@ export async function eraseUserPersonalData(
   invalidateUserCache(String(userId));
 
   logger.info('User personal data erased', { operation: 'eraseUserPersonalData', userId, adminUserId });
+}
+
+function attemptedUsername(details: string | null): string {
+  try {
+    const name = (JSON.parse(details ?? '') as { username?: unknown })?.username;
+    return typeof name === 'string' ? name.toLowerCase() : '';
+  } catch {
+    return '';
+  }
 }

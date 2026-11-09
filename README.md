@@ -305,7 +305,7 @@ DSAT is self-hosted, so the operator is the data controller. This section descri
 **What is stored:**
 
 - `users`: username, email, password hash, SSO issuer and subject, last sign-in time.
-- `audit_logs`: IP address and user agent of each logged action, and the attempted username on a failed sign-in.
+- `audit_logs`: IP address and user agent of each logged action, the attempted username on a failed sign-in, and the username and email recorded when an admin creates an account.
 - `email_log`: recipient address of each email sent.
 - `web_vitals`: route and timings only, with no user id.
 
@@ -313,12 +313,12 @@ DSAT is self-hosted, so the operator is the data controller. This section descri
 
 - `email_log`: 90 days (`EMAIL_LOG_RETENTION_DAYS`).
 - Snapshots: 90 days (`SNAPSHOT_RETENTION_DAYS`). Web vitals: 90 days (`WEB_VITALS_RETENTION_DAYS`).
-- `audit_logs`, `users` and jobs: kept until removed.
+- `audit_logs`: see Data retention above. `users` and jobs: kept until removed.
 
 **Deactivate vs erase:**
 
 - **Deactivate** blocks sign-in and can be reversed with **Reactivate**.
-- **Erase data** (Admin → Users, on a deactivated non-admin account) is irreversible. It replaces the username and email with `erased-<id>`, makes the password unusable, unlinks SSO, ends the user's sessions and disables their schedules. It also removes their IP addresses and user agents from `audit_logs`, the failed sign-in entries that name them, and their address from `email_log`. Jobs and scrape history are kept, attributed to the anonymous id.
+- **Erase data** (Admin → Users, on a deactivated non-admin account) is irreversible. It replaces the username and email with `erased-<id>`, makes the password unusable, unlinks SSO, ends the user's sessions and disables their schedules. It also removes their IP addresses and user agents from `audit_logs`, the failed sign-in entries that name them, the details of their account-creation entry, and their address from `email_log`. Jobs and scrape history are kept, attributed to the anonymous id. An erased account can no longer be edited, unlocked or reactivated, and no one can choose a username starting with `erased-`.
 
 **Data subject requests:** for access or export, an admin uses the user export (Admin → Users) and the audit-log export (Admin → Audit Logs). For deletion, deactivate the account and then erase it. Backups and the operator's own logs are outside DSAT and follow the operator's policy.
 
