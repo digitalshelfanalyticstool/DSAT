@@ -296,7 +296,7 @@ Alerts appear on the **Alerts** page for everyone, with an unread badge in the s
 
 ### Data retention
 
-The maintenance task (every `MAINTENANCE_INTERVAL_MS`, default weekly) drops snapshots, alerts, image checks and site-monitor runs older than `SNAPSHOT_RETENTION_DAYS`, and web-vitals data older than `WEB_VITALS_RETENTION_DAYS`. `product_snapshots` is partitioned by month and `web_vitals` by week, with UTC bounds.
+The maintenance task (every `MAINTENANCE_INTERVAL_MS`, default weekly) drops snapshots, alerts, image checks and site-monitor runs older than `SNAPSHOT_RETENTION_DAYS`, and web-vitals data older than `WEB_VITALS_RETENTION_DAYS`. `product_snapshots` is partitioned by month and `web_vitals` by week, with UTC bounds. The same task deletes `audit_logs` rows older than `AUDIT_LOG_RETENTION_DAYS` (default 365).
 
 ### Personal data
 
