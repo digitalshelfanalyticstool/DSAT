@@ -81,14 +81,15 @@ export function forEachScriptTag<T>(
  */
 export function findProductJsonInScripts(html: string): object | undefined {
   return forEachScriptTag(html, (content) => {
-    // Bound the greedy quantifier to a 1MB cap so degenerate inputs cannot
-    // cause super-linear backtracking on the surrounding capture group.
-     
-    const jsonObjectRegex = /(\{[\s\S]{10,1000000}\})/;
-    const jsonMatch = jsonObjectRegex.exec(content);
-    if (!jsonMatch) return undefined;
+    // First '{' to the last '}' within 1 MB of it, at least 10 chars apart: the
+    // span the old greedy regex matched, found in linear time. That regex
+    // backtracked quadratically on a run of '{' with no '}' after it.
+    const start = content.indexOf('{');
+    if (start === -1) return undefined;
+    const end = content.lastIndexOf('}', start + 1_000_001);
+    if (end - start - 1 < 10) return undefined;
     try {
-      const parsed = JSON.parse(jsonMatch[1]);
+      const parsed = JSON.parse(content.slice(start, end + 1));
       if (
         typeof parsed === 'object' &&
         parsed !== null &&
