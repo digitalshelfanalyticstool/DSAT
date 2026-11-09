@@ -85,7 +85,9 @@ export const config = {
     },
     /** Retention window (days) for audit_logs rows. Default 365. */
     get auditLogRetentionDays(): number {
-      return Math.max(1, Number.parseInt(process.env.AUDIT_LOG_RETENTION_DAYS || '365', 10) || 365);
+      const days = Number.parseInt(process.env.AUDIT_LOG_RETENTION_DAYS || '', 10);
+      // A typo must not shrink the audit trail: anything below 1 day falls back to the default.
+      return days >= 1 ? days : 365;
     },
     /**
      * Max rows written per batched UPSERT/INSERT during a bulk user import.
