@@ -31,6 +31,9 @@ services:
     environment:
       <<: *server-env
       PROCESS_ROLE: api
+      # Caddy is the only way in and replaces X-Forwarded-For with the client
+      # address, so trust one hop. Add hops for any proxy in front of Caddy.
+      TRUST_PROXY: ${TRUST_PROXY:-1}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

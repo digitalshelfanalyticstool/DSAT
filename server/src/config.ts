@@ -40,7 +40,7 @@ export type ProcessRole = 'api' | 'worker';
 // --- Config object ---
 
 let _jwtSecret: string | null = null;
-let _trustProxy: string | number = 1;
+let _trustProxy: string | number | boolean = false;
 
 export const config = {
   get isProduction(): boolean {
@@ -58,7 +58,7 @@ export const config = {
     get corsOrigins(): string | undefined {
       return process.env.CORS_ORIGINS || undefined;
     },
-    get trustProxy(): string | number {
+    get trustProxy(): string | number | boolean {
       return _trustProxy;
     },
   },
@@ -682,13 +682,13 @@ export function validateConfig(role: ProcessRole = 'api'): EnvValidationResult {
     );
   }
 
-  // --- Optional: TRUST_PROXY (defaults to 1) ---
+  // --- Optional: TRUST_PROXY (defaults to false: X-Forwarded-For is ignored) ---
   const rawTrustProxy = process.env.TRUST_PROXY;
   if (rawTrustProxy !== undefined && rawTrustProxy !== '') {
     const asNumber = Number(rawTrustProxy);
     _trustProxy = Number.isFinite(asNumber) ? asNumber : rawTrustProxy;
   } else {
-    _trustProxy = 1;
+    _trustProxy = false;
   }
 
   if (errors.length === 0 && process.env.JWT_SECRET) {
