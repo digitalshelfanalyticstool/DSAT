@@ -11,7 +11,7 @@ A self-hostable, full-stack application for tracking product variant data (color
 
 The screenshots use the fictional [demo data](#demo-data). To retake them against a running demo install: `BASE_URL=http://localhost:8080 SHOT_USER=<admin> SHOT_PASS=<password> node scripts/screenshots.mjs`.
 
-**Current version:** v1.0.0. Releases are tagged in git (`git tag --list 'v*'`).
+**Current version:** v1.1.0. Releases are tagged in git (`git tag --list 'v*'`).
 
 ## Retailers
 
@@ -98,7 +98,7 @@ cd DSAT
 docker compose up -d        # pulls the prebuilt images; add --build to build from source
 ```
 
-The images are published to GitHub's container registry on each release. To pin a release instead of `latest`, set `APP_VERSION=1.0.0` in `.env`.
+The images are published to GitHub's container registry on each release. To pin a release instead of `latest`, set `APP_VERSION=1.1.0` in `.env`.
 
 Then:
 

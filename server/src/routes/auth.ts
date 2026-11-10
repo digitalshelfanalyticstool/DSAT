@@ -62,11 +62,17 @@ router.get('/setup-status', asyncHandler(async (_req, res) => {
  */
 router.post('/setup', validate(setupSchemas), asyncHandler(async (req: ValidatedRequest<typeof setupSchemas>, res) => {
   const { setupCode, palette, ...account } = req.body;
+  const db = await DatabaseService.getInstance();
+  // Before the code check: the code is cleared once setup succeeds, so a later
+  // attempt would otherwise get 403 "wrong code" instead of "already done".
+  if (!(await needsSetup(db))) {
+    res.status(409).json(errorResponse('Setup is already complete', 'setup_complete'));
+    return;
+  }
   if (!checkSetupCode(setupCode)) {
     res.status(403).json(errorResponse('The setup code is wrong. Find the current one in the API server log.', 'invalid_setup_code'));
     return;
   }
-  const db = await DatabaseService.getInstance();
   let user;
   try {
     user = await createFirstAdmin(db, account);
