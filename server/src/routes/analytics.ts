@@ -375,7 +375,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Truncate to the UTC day: the queries are day-grained anyway (`to` is read
 // as `$2::date`), and a millisecond-precise value would give every request
 // its own cache key.
-const utcDay = z.coerce.date().transform((d) => new Date(Math.floor(d.getTime() / DAY_MS) * DAY_MS));
+// Without the custom error, a missing param reads "expected date, received Date".
+const utcDay = z.coerce.date({ error: 'must be a date like 2026-11-09' }).transform((d) => new Date(Math.floor(d.getTime() / DAY_MS) * DAY_MS));
 
 const overviewQuerySchema = z
   .object({
