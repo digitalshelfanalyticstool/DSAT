@@ -1,6 +1,6 @@
 {
   "name": "enterprise-web-scraper",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Enterprise Web Scraper System for extracting product variant data from ecommerce websites",
   "workspaces": [
